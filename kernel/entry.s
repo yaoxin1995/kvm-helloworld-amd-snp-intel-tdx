@@ -16,7 +16,9 @@ _start:
 
   leaq   init_kernel_page_tables(%rip), %rax
   callq *%rax;/*call set_page_tables*/
-
+# enable page tables
+# enable cache
+# all is good. now go to the kernel start
   leaq   kernel_main_tdx(%rip), %rax
   callq *%rax;/*call kernel_main_tdx*/
 
