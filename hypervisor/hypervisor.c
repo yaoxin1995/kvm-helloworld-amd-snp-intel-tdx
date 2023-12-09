@@ -815,7 +815,7 @@ VM *kvm_init(const char * bios_name, const char* kernel_name )
   // Check which vm type in KVM is supported, now first bit is legacy vm, second bit is protected vm
   int tdx_is_supported = ioctl(kvmfd, KVM_CHECK_EXTENSION, KVM_CAP_VM_TYPES);
   printf("VM Type supported bitmap: %d \n",tdx_is_supported);
-  if (!(tdx_is_supported & BIT(KVM_X86_PROTECTED_VM)))
+  if (!(tdx_is_supported & BIT(KVM_X86_TDX_VM)))
     pexit("Protected VM is not supported in kvm");
 
   // Check KVM version
@@ -1187,6 +1187,14 @@ void execute(VM *vm)
       fprintf(stderr, "error: kvm run failed %s\n", strerror(-run_ret));
       break;
     }
+    struct kvm_lapic_state kapic;
+    if(ioctl(vm->vcpufd,KVM_GET_LAPIC,&kapic)<0){
+      pexit("Get lapic failed");
+    }
+    for(int i=0;i<KVM_APIC_REG_SIZE;i++){
+      printf("index: %d, reg_value:%c",i,kapic.regs[i]);
+    }
+
     // dump_regs(vm->vcpufd);
     switch (vm->run->exit_reason)
     {
