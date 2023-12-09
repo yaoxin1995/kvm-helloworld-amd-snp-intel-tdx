@@ -399,7 +399,7 @@ static int memory_region_discard_range_fd(memory_region mr, uint64_t start,
          *    fallocate works on hugepages and shmem
          *    shared anonymous memory requires madvise REMOVE
          */
-        //need_madvise =  (mr.fd == fd);
+        need_madvise =  (mr.fd == fd);
         need_fallocate = fd != -1;
         if (need_fallocate) {
             /* For a file, this causes the area of the file to be zero'd
@@ -417,7 +417,7 @@ static int memory_region_discard_range_fd(memory_region mr, uint64_t start,
             }
 
         }
-        /*if (need_madvise) {
+        if (need_madvise) {
             ret = madvise(host_startaddr, length, MADV_DONTNEED);
             
             if (ret) {
@@ -427,7 +427,7 @@ static int memory_region_discard_range_fd(memory_region mr, uint64_t start,
                              __func__, start, length, ret);
                 goto err;
             }
-        }*/
+        }
     } else {
         error_report("%s: Overrun block,start:%lu,length:%lu,memory_size:%llu", __func__,start,length,mr.kvm_mr->region.memory_size);
     }
@@ -801,7 +801,85 @@ int register_coalesced_mmio(int vmfd,__u64 addr, __u32 size, __u32 pio){
   return ret;
 }
 
+void set_msrs(struct kvm_msrs * msrs, bool set){
+  msrs->nmsrs=0x1f;
+  msrs->pad=0;
+  msrs->entries[0].index = MSR_IA32_MISC_ENABLE;
+  msrs->entries[0].data = set? 0x1:0x0;
+  msrs->entries[0].reserved=0;
 
+  msrs->entries[1].index = MSR_KVM_POLL_CONTROL;
+  msrs->entries[1].data = set? 0x1:0x0;
+  msrs->entries[1].reserved=0;
+
+  msrs->entries[2].index = MSR_IA32_TSC_DEADLINE;
+  msrs->entries[2].data = 0x0;
+  msrs->entries[2].reserved=0;
+  
+  msrs->entries[3].index = 0x2ff;
+  msrs->entries[3].data = 0x0;
+  msrs->entries[3].reserved=0;
+
+  msrs->entries[4].index = 0x250;
+  msrs->entries[4].data = 0x0;
+  msrs->entries[4].reserved=0;
+
+  msrs->entries[5].index = 0x258;
+  msrs->entries[5].data = 0x0;
+  msrs->entries[5].reserved=0;
+
+  msrs->entries[6].index = 0x259;
+  msrs->entries[6].data = 0x0;
+  msrs->entries[6].reserved=0;
+
+  msrs->entries[7].index = 0x268;
+  msrs->entries[7].data = 0x0;
+  msrs->entries[7].reserved=0;
+  
+  msrs->entries[8].index = 0x269;
+  msrs->entries[8].data = 0x0;
+  msrs->entries[8].reserved=0;
+
+  msrs->entries[9].index = 0x26a;
+  msrs->entries[9].data = 0x0;
+  msrs->entries[9].reserved=0;
+
+  msrs->entries[10].index = 0x26b;
+  msrs->entries[10].data = 0x0;
+  msrs->entries[10].reserved=0;
+  
+  msrs->entries[11].index = 0x26c;
+  msrs->entries[11].data = 0x0;
+  msrs->entries[11].reserved=0;
+  
+  msrs->entries[12].index = 0x26d;
+  msrs->entries[12].data = 0x0;
+  msrs->entries[12].reserved=0;
+
+  msrs->entries[13].index = 0x26e;
+  msrs->entries[13].data = 0x0;
+  msrs->entries[13].reserved=0;
+
+  msrs->entries[14].index = 0x26f;
+  msrs->entries[14].data = 0x0;
+  msrs->entries[14].reserved=0;
+
+  int MSR_MTRRphysBase0 = 0x200;
+  for(int i = 15;i < 31; i++){
+    msrs->entries[i].index = MSR_MTRRphysBase0++;
+    msrs->entries[i].data = 0x0;
+    msrs->entries[i].reserved=0;
+  }
+}
+int handle_io_write(void * data,int size,uint32_t count){
+  for(int i=0;i<count;i++){
+    for(int j=0;j<size;j++){
+      printf("%c",*(char*)(data+i*count+j));
+    }
+  }
+  return 0;
+
+};
 
 
 
@@ -1023,21 +1101,8 @@ VM *kvm_init(const char * bios_name )
   register_coalesced_mmio(vmfd,0xcfa,0x2,0x1);
   register_coalesced_mmio(vmfd,0x70,0x1,0x1);
 
-  struct kvm_msrs * msrs = malloc(sizeof(struct kvm_msrs)+3*sizeof(struct kvm_msr_entry));
-  msrs->nmsrs=3;
-  msrs->pad=0;
-  msrs->entries[0].index = MSR_IA32_MISC_ENABLE;
-  msrs->entries[0].data = 0x1;
-  msrs->entries[0].reserved=0;
-
-  msrs->entries[0].index = MSR_KVM_POLL_CONTROL;
-  msrs->entries[0].data = 0x1;
-  msrs->entries[0].reserved=0;
-
-  msrs->entries[0].index = MSR_IA32_TSC_DEADLINE;
-  msrs->entries[0].data = 0x0;
-  msrs->entries[0].reserved=0;
-
+  struct kvm_msrs * msrs = malloc(sizeof(struct kvm_msrs)+31*sizeof(struct kvm_msr_entry));
+  set_msrs(msrs,true);
   if(ioctl(vcpufd,KVM_SET_MSRS,msrs)<0){
     pexit("msrs setting failed");
   }
@@ -1178,6 +1243,45 @@ void execute(VM *vm)
 {
   int ret, run_ret;
   vm->run->ready_for_interrupt_injection = 0;
+  struct kvm_tpr_access_ctl * ctl= malloc(sizeof(struct kvm_tpr_access_ctl));
+  memset(ctl,0x0,sizeof(struct kvm_tpr_access_ctl));
+  if(ioctl(vm->vcpufd,KVM_TPR_ACCESS_REPORTING,ctl)<0){
+    pexit("Set KVM_TPR_ACCESS_REPORTING failed");
+  }
+  free(ctl);
+
+  struct kvm_vapic_addr vapid_addr = {
+        .vapic_addr = 0,
+  };
+
+  if(ioctl(vm->vcpufd,KVM_SET_VAPIC_ADDR,&vapid_addr)<0){
+    pexit("Set KVM_SET_VAPIC_ADDR failed");
+  }
+
+  struct kvm_lapic_state *apic = malloc(sizeof(struct kvm_lapic_state));
+  memset(apic,0x0,sizeof(struct kvm_lapic_state));
+  apic->regs[224]=0xff;
+  apic->regs[225]=0xff;
+  apic->regs[226]=0xff;
+  apic->regs[227]=0xff;
+  apic->regs[240]=0xff;
+  apic->regs[802]=0x1;
+  apic->regs[818]=0x1;
+  apic->regs[834]=0x1;
+  apic->regs[850]=0x1;
+  apic->regs[866]=0x1;
+  apic->regs[882]=0x1;
+  if(ioctl(vm->vcpufd,KVM_SET_LAPIC,apic)<0){
+    pexit("Set lapic failed");
+  }
+  free(apic);
+
+  struct kvm_mp_state mp_state;
+  mp_state.mp_state=KVM_MP_STATE_RUNNABLE;
+  if(ioctl(vm->vcpufd,KVM_SET_MP_STATE,&mp_state)<0){
+    pexit("Set MP state failed");
+  }
+
   do{
     ret = -1;
     run_ret=ioctl(vm->vcpufd, KVM_RUN, NULL);
@@ -1187,13 +1291,26 @@ void execute(VM *vm)
       fprintf(stderr, "error: kvm run failed %s\n", strerror(-run_ret));
       break;
     }
+
+    struct kvm_msrs * temp_msr = (struct kvm_msrs *)malloc(sizeof(struct kvm_msrs) + 31*sizeof(struct kvm_msr_entry));
+    set_msrs(temp_msr,false);
+    if(ioctl(vm->vcpufd,KVM_GET_MSRS,temp_msr)<0){
+      pexit("Get MSRS failed");
+    }
+    free(temp_msr);
+    struct kvm_vcpu_events events;
+    if(ioctl(vm->vcpufd,KVM_GET_VCPU_EVENTS,&events)<0){
+      pexit("Get events failed");
+    }
+
     struct kvm_lapic_state kapic;
     if(ioctl(vm->vcpufd,KVM_GET_LAPIC,&kapic)<0){
       pexit("Get lapic failed");
     }
-    for(int i=0;i<KVM_APIC_REG_SIZE;i++){
-      printf("index: %d, reg_value:%c",i,kapic.regs[i]);
-    }
+
+    /*if(ioctl(vm->vcpufd,KVM_KVMCLOCK_CTRL,0)<0){
+      pexit("KVM_KVMCLOCK_CTRL failed");
+    }*/
 
     // dump_regs(vm->vcpufd);
     switch (vm->run->exit_reason)
@@ -1202,13 +1319,17 @@ void execute(VM *vm)
       fprintf(stderr, "KVM_EXIT_HLT\n");
       break;
     case KVM_EXIT_IO:
-      pexit("vmexit io\n");
       if (!check_iopl(vm))
         error("KVM_EXIT_SHUTDOWN\n");
-      if (vm->run->io.port & HP_NR_MARK)
+      if (vm->run->io.port == 0x3f8)
       {
-        if (hp_handler(vm->run->io.port, vm) < 0)
-          error("Hypercall failed\n");
+        if(vm->run->io.direction){
+          ret = handle_io_write((uint8_t *)vm->run + vm->run->io.data_offset,
+                              vm->run->io.size,
+                              vm->run->io.count);
+        }
+        if(ret<0)
+          pexit("IO write failed.\n");
       }
       else
         error("Unhandled I/O port: 0x%x\n", vm->run->io.port);
