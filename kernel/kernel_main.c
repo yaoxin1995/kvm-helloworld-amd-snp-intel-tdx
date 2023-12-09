@@ -87,7 +87,7 @@ int kernel_test(uint64_t hob, uint64_t _payload){
 }
 int kernel_main_tdx(uint64_t hob, uint64_t _payload) {
 
-  //unsigned char buffer[20] = {0};
+  unsigned char buffer[20] = {0};
   
   write_in_console("Setting up page table finished.\n");
 
@@ -114,6 +114,21 @@ int kernel_main_tdx(uint64_t hob, uint64_t _payload) {
   idt_init(idt);
   write_in_console("Start enabling apic interrupt.\n");
   enable_apic_interrupt();
+  void* report_buffer = kmalloc(PAGE_SIZE,MALLOC_PAGE_ALIGN);
+  uint8_t additional_data[64]={0};
+  uint64_t report_ret = tdcall_report((uint64_t )report_buffer&~KERNEL_BASE_OFFSET,additional_data);
+  struct TdxReport tdx_report;
+  if(report_ret){
+    uint64_to_string(report_ret,buffer);
+    write_in_console("Get report error! error code:0x");
+    write_in_console((char*)buffer);
+    write_in_console("\n");
+  }else{
+    tdx_report = *(struct TdxReport*)report_buffer;
+    dump_tdx_report(&tdx_report);
+  }
+
+
   if(register_syscall() != 0) return 1;
   //write_in_console("Start setting up stack and jump to new stack.\n");
   //stack initialization

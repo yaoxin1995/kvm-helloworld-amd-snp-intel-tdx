@@ -1,6 +1,7 @@
 #include "tdx.h"
 #include <utils/panic.h>
 #include <utils/string.h>
+#include <mm/translate.h>
 uint64_t extern __attribute__((ms_abi))asm_td_vmcall(void *args, uint64_t do_sti);
 uint64_t extern __attribute__((ms_abi))asm_td_call(void *args);
 static uint64_t SHARED_MASK;
@@ -48,6 +49,19 @@ struct TdVeInfo tdcall_get_ve_info(){
     return ve_info;
 }
 
+uint64_t tdcall_report(uint64_t buffer, uint8_t additional_data[TD_REPORT_ADDITIONAL_DATA_SIZE]){
+    memcpy((void*)((buffer+TD_REPORT_SIZE)|KERNEL_BASE_OFFSET),(void*)additional_data,TD_REPORT_ADDITIONAL_DATA_SIZE);
+    struct TdcallArgs args = {
+        .rax = TDCALL_TDREPORT,
+        .rcx =  buffer,
+        .rdx = buffer + TD_REPORT_SIZE
+    };
+    int ret = asm_td_call((void *)&args);
+    if (ret != TDVMCALL_STATUS_SUCCESS){
+        return args.r10;
+    }
+   return 0;
+}
 struct CpuIdInfo tdvmcall_cpuid(uint32_t eax, uint32_t ecx){
     struct TdVmcallArgs args = {
         .r11 = (uint64_t)TDVMCALL_CPUID,
@@ -260,4 +274,100 @@ int tdvmcall_mapgpa(bool shared,uint64_t paddr,uint64_t length) {
         return -1;
     }
     return 0;
+}
+
+void write_uint8_t_array(uint8_t *array,int len){
+    unsigned char buffer[20] = {0};
+    for(int i=0;i<len;i=i+8){
+        uint64_to_string(*(uint64_t*)array,buffer);
+        write_in_console((char*)buffer);
+    }
+}
+
+void dump_tdx_report(struct TdxReport* report_buffer){
+    unsigned char buffer[20] = {0};
+    write_in_console("----------\n");
+    write_in_console("Tdx Report\n");
+
+    write_in_console("  Report MAC:\n");
+    write_in_console("      Report Type:\n");
+    write_in_console("          Type:0x");
+    uint64_to_string((uint64_t)report_buffer->report_mac.report_type.type,buffer);
+    write_in_console((char*)buffer);
+    write_in_console("\n");
+    write_in_console("          Subtype:0x");
+    uint64_to_string((uint64_t)report_buffer->report_mac.report_type.subtype,buffer);
+    write_in_console((char*)buffer);
+    write_in_console("\n");
+    write_in_console("          Version:0x");
+    uint64_to_string((uint64_t)report_buffer->report_mac.report_type.version,buffer);
+    write_in_console((char*)buffer);
+    write_in_console("\n");
+    write_in_console("      cpu_svn:0x");
+    write_uint8_t_array(report_buffer->report_mac.cpu_svn,16);
+    write_in_console("\n");
+    write_in_console("      tee_tcb_info_hash:0x");
+    write_uint8_t_array(report_buffer->report_mac.tee_tcb_info_hash,48);
+    write_in_console("\n");
+    write_in_console("      tee_info_hash:0x");
+    write_uint8_t_array(report_buffer->report_mac.tee_info_hash,48);
+    write_in_console("\n");
+    write_in_console("      report_data:0x");
+    write_uint8_t_array(report_buffer->report_mac.report_data,64);
+    write_in_console("\n");
+    write_in_console("      mac:0x");
+    write_uint8_t_array(report_buffer->report_mac.mac,32);
+    write_in_console("\n");
+    write_in_console("\n");
+
+    write_in_console("  TeeTcb Info:\n");
+    write_in_console("      valid:0x");
+    write_uint8_t_array(report_buffer->tee_tcb_info.valid,8);
+    write_in_console("\n");
+    write_in_console("      tee_tcb_svn:0x");
+    write_uint8_t_array(report_buffer->tee_tcb_info.tee_tcb_svn,16);
+    write_in_console("\n");
+    write_in_console("      mrseam:0x");
+    write_uint8_t_array(report_buffer->tee_tcb_info.mrseam,48);
+    write_in_console("\n");
+    write_in_console("      mrsigner_seam:0x");
+    write_uint8_t_array(report_buffer->tee_tcb_info.mrsigner_seam,48);
+    write_in_console("\n");
+    write_in_console("      attributes:0x");
+    write_uint8_t_array(report_buffer->tee_tcb_info.attributes,8);
+    write_in_console("\n");
+    write_in_console("\n");
+
+    write_in_console("  TdInfo Report:\n");
+    write_in_console("      attributes:0x");
+    write_uint8_t_array(report_buffer->td_info.attributes,8);
+    write_in_console("\n");
+    write_in_console("      xfam:0x");
+    write_uint8_t_array(report_buffer->td_info.xfam,8);
+    write_in_console("\n");
+    write_in_console("      mrtd:0x");
+    write_uint8_t_array(report_buffer->td_info.mrtd,48);
+    write_in_console("\n");
+    write_in_console("      mrconfig_id:0x");
+    write_uint8_t_array(report_buffer->td_info.mrconfig_id,48);
+    write_in_console("\n");
+    write_in_console("      mrowner:0x");
+    write_uint8_t_array(report_buffer->td_info.mrowner,48);
+    write_in_console("\n");
+    write_in_console("      mrownerconfig:0x");
+    write_uint8_t_array(report_buffer->td_info.mrownerconfig,48);
+    write_in_console("\n");
+    write_in_console("      rtmr0:0x");
+    write_uint8_t_array(report_buffer->td_info.rtmr0,48);
+    write_in_console("\n");
+    write_in_console("      rtmr1:0x");
+    write_uint8_t_array(report_buffer->td_info.rtmr1,48);
+    write_in_console("\n");
+    write_in_console("      rtmr2:0x");
+    write_uint8_t_array(report_buffer->td_info.rtmr2,48);
+    write_in_console("\n");
+    write_in_console("      rtmr3:0x");
+    write_uint8_t_array(report_buffer->td_info.rtmr3,48);
+    write_in_console("\n");
+    write_in_console("----------\n");
 }
