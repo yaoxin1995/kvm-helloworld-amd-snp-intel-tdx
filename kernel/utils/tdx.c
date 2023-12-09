@@ -1,5 +1,6 @@
 #include "tdx.h"
-
+#include <utils/panic.h>
+#include <utils/string.h>
 uint64_t extern __attribute__((ms_abi))asm_td_vmcall(void *args, uint64_t do_sti);
 uint64_t extern __attribute__((ms_abi))asm_td_call(void *args);
 static uint64_t SHARED_MASK;
@@ -199,6 +200,11 @@ uint64_t tdvmcall_rdmsr(uint32_t index){
     uint64_t ret = asm_td_vmcall((void *)&args,false);
 
     if (ret != TDVMCALL_STATUS_SUCCESS) {
+        write_in_console("rdmsr error!\nreturn value:0x");
+        unsigned char buffer[20] = {0};
+        uint64_to_string((uint64_t)ret,buffer);
+        write_in_console((char*)buffer);
+        write_in_console("\n");
         tdvmcall_halt();
     }
     return args.r11;
@@ -210,6 +216,15 @@ void tdvmcall_wrmsr(uint32_t index, uint64_t value) {
         .r12 = (uint64_t)index,
         .r13 = value
     };
+    write_in_console("wrmsr triggered, index:0x");
+    unsigned char buffer[20] = {0};
+    uint64_to_string((uint64_t)index,buffer);
+    write_in_console((char*)buffer);
+    write_in_console(" value:0x");
+    uint64_to_string(value,buffer);
+    write_in_console((char*)buffer);
+    write_in_console("\n");
+
 
     uint64_t ret = asm_td_vmcall((void *)&args,false);
 

@@ -127,11 +127,24 @@ void init_gdt(struct gdt_entry * allocated_gdt, struct tss * allocated_tss){
     write_in_console((char*)buffer);
     write_in_console("\n");
     //uint16_t _code32 =  gdt_install_user_segment_descriptor(gdt_size,KERNEL_CODE32_ACCESS,KERNEL_CODE32_FLAGS);
-    uint16_t code = gdt_install_user_segment_descriptor(gdt_size,KERNEL_CODE64_ACCESS,KERNEL_CODE64_FLAGS);
+    uint16_t code_kernel = gdt_install_user_segment_descriptor(gdt_size,KERNEL_CODE64_ACCESS,KERNEL_CODE64_FLAGS);
     //uint16_t _code_exception = gdt_install_user_segment_descriptor(gdt_size,KERNEL_CODE64_ACCESS,KERNEL_CODE64_FLAGS);
-    uint16_t data = gdt_install_user_segment_descriptor(gdt_size,KERNEL_DATA_ACCESS,KERNEL_DATA_FLAGS);
+    uint16_t data_kernel = gdt_install_user_segment_descriptor(gdt_size,KERNEL_DATA_ACCESS,KERNEL_DATA_FLAGS);
     load_gdtr();
     
+    load_cs(code_kernel);
+    load_ds(data_kernel);
+    load_es(data_kernel);
+    load_ss(data_kernel);
+    load_fs(data_kernel);
+    load_gs(data_kernel);
+    init_tss();
+
+    gdt_install_user_segment_descriptor(gdt_size,USER_DATA_ACCESS,USER_DATA_FLAGS);//user data
+    gdt_install_user_segment_descriptor(gdt_size,USER_CODE64_ACCESS,USER_CODE64_FLAGS);//user code
+
+    load_gdtr();
+
     struct gdt_ptr gdtr_value;
     asm("sgdt %0":"=m"(gdtr_value));
     uint64_to_string((uint64_t)gdtr_value.limit,buffer);
@@ -143,13 +156,5 @@ void init_gdt(struct gdt_entry * allocated_gdt, struct tss * allocated_tss){
     write_in_console("gdtr base: 0x");
     write_in_console((char*)buffer);
     write_in_console("\n");
-
-    load_cs(code);
-    load_ds(data);
-    load_es(data);
-    load_ss(data);
-    load_fs(data);
-    load_gs(data);
-    init_tss();
 }
 

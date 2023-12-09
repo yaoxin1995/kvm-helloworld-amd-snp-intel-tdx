@@ -1,6 +1,6 @@
 {
     .start    = 0,
-    .end      = 0x800000,
+    .end      = 0x10000,
     .offset   = 0,
     .prot     = PROT_W
 },

@@ -10,7 +10,7 @@ int sys_open(const char *path) {
   write_in_console(path);
   write_in_console("\n");
   if(!access_string_ok(path)) return -EFAULT;
-  void *dst = copy_str_from_user(path);
+  void *dst = copy_str_from_user_to_shared(path);
    write_in_console("Have copied from user\n");
   if(dst == 0) return -ENOMEM;
   int fd = hp_open(physical(dst));

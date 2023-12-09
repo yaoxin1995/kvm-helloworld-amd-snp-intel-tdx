@@ -40,13 +40,10 @@ void map_one_page(uint64_t base, uint64_t offset,int prot){
   #define PAGING(p, c) do { \
     if(!(*p & PDE64_PRESENT)) { \
       c = (uint64_t*) kframe_allocate_range_pt(1); \
-      *p = PDE64_PRESENT | PDE64_RW |(uint64_t) c; \
+      *p = PDE64_PRESENT | PDE64_RW | PDE64_USER |(uint64_t) c; \
     } else { \
       c = (uint64_t*) (*p & -0x1000); \
     } \
-    if(prot & PROT_R) {\
-      *p |=PDE64_USER;\
-    }\
   } while(0);
   
   PAGING(&pml4[PML4OFF(vaddr)], pdp);
@@ -109,10 +106,13 @@ void init_kernel_page_tables(uint64_t hob, uint64_t _payload)
   
   write_in_console("Start setting up page table.\n");
   uint64_t page_table = get_usable(KERNEL_PAGING_SIZE);
+  write_in_console("Page table address:0x");
   memset((uint64_t*)page_table,0x0,KERNEL_PAGING_SIZE);
-  kframe_allocator_init_pt(0,KERNEL_PAGING_SIZE);
+  kframe_allocator_init_pt(page_table,KERNEL_PAGING_SIZE);
+  uint64_to_string((uint64_t)page_table,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
 
-  
   pml4 = (uint64_t*)kframe_allocate_range_pt(1);
 
   for(int i=0;i<10;i++){
@@ -128,9 +128,8 @@ void init_kernel_page_tables(uint64_t hob, uint64_t _payload)
 uint64_t get_usable(uint64_t size){
     for(int i=0;i<memory_map_num_entries;i++){
         if(memory_map[i].type == E820_RAM && memory_map[i].length >=size){
-            memory_map[i].address += size;
             memory_map[i].length -= size;
-            return memory_map[i].address-size;
+            return memory_map[i].address+memory_map[i].length;
         }
     }
     panic("Out of memory, cannot get usable memory.");

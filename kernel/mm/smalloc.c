@@ -137,6 +137,7 @@ void sfree(void *mem) {
   uint64_to_string((uint64_t)mem,buffer);
   write_in_console("sfree started address:0x");
   write_in_console((char*)buffer);
+  write_in_console("\n");
   if(mem == 0) return;
   struct chunk* c = mem2chunk(mem);
   uint64_to_string((uint64_t)c->size,buffer);
@@ -150,5 +151,5 @@ void sfree(void *mem) {
     c->size = 0;
   }
   else insert_sorted(c);
-  write_in_console("sfree finished");
+  write_in_console("sfree finished\n");
 }

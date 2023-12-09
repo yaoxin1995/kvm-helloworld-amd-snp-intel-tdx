@@ -30,7 +30,7 @@
 
 #define MIN_USER_MEM MIN_MMAP_ADDR
 
-#define USER_MEM_RANGE_OK(v) ((uint64_t)(v) >= MIN_USER_MEM && \
+#define USER_MEM_RANGE_OK(v) ( \
   ((uint64_t)(v) >> 48) == 0 && \
   ((uint64_t)(v) >> 39) != 1)
 

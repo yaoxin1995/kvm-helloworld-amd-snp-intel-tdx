@@ -18,6 +18,7 @@ static inline uint64_t* get_pml4_addr() {
 #define PDPOFF(v) _OFFSET(v, 30)
 #define PDOFF(v) _OFFSET(v, 21)
 #define PTOFF(v) _OFFSET(v, 12)
+
 /* if vaddr is already mapping to some address, overwrite it. */
 void add_trans_user(void* vaddr_, void* paddr_, int prot) {
   uint64_t vaddr = (uint64_t) vaddr_;
@@ -27,21 +28,30 @@ void add_trans_user(void* vaddr_, void* paddr_, int prot) {
   uint64_t* pml4 = get_pml4_addr(), *pdp, *pd, *pt;
 #define PAGING(p, c) do { \
     if(!(*p & PDE64_PRESENT)) { \
-      c = (uint64_t*) kframe_allocate_range_pt(1); \
-      *p = PDE64_PRESENT | PDE64_RW | PDE64_USER |(uint64_t) c; \
+      c = (uint64_t*) (kframe_allocate_range_pt(1)| KERNEL_BASE_OFFSET); \
+      *p = PDE64_PRESENT | PDE64_RW | PDE64_USER |(uint64_t) physical(c); \
     } else { \
-      if(!(*p & PDE64_USER))  *p |=PDE64_USER; \
+      if(!(*p & PDE64_USER)) panic("translate.c#add_trans_user: invalid address"); \
       c = (uint64_t*) ((*p & -0x1000) | KERNEL_BASE_OFFSET); \
     } \
   } while(0);
-  PAGING(&pml4[PML4OFF(vaddr)], pdp);
+  PAGING(&pml4[PML4OFF(vaddr)], pdp); 
   PAGING(&pdp[PDPOFF(vaddr)], pd);
   PAGING(&pd[PDOFF(vaddr)], pt);
 #undef PAGING
   pt[PTOFF(vaddr)] = PDE64_PRESENT | paddr;
   if(prot & PROT_R) pt[PTOFF(vaddr)] |= PDE64_USER;
   if(prot & PROT_W) pt[PTOFF(vaddr)] |= PDE64_RW;
+
+  asm  volatile(
+    "mov rax, QWORD PTR [rip + pml4]\n"  
+    "mov cr3, rax\n"                   
+    :
+    : 
+    : "rax"
+ );
 }
+
 
 int modify_permission(void *vaddr, int prot) {
   uint64_t *pml4 = get_pml4_addr(), *pdp, *pd, *pt;
@@ -80,7 +90,7 @@ uint64_t translate(void *vaddr, int usermode, int writable) {
     return (pd[PDOFF(vaddr)] & -0x200000) + ((uint64_t) vaddr & 0x1fffff);
   PAGING(&pt[PTOFF(vaddr)], ret);
 #undef PAGING
-  return physical(ret) + ((uint64_t) vaddr & 0xfff);
+  return (physical(ret) + ((uint64_t) vaddr & 0xfff));
 }
 
 /* vaddr should always an address of kernel-space */

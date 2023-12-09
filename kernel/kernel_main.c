@@ -20,7 +20,6 @@
 #define DMA_SIZE 0x100000
 #define STACK_SIZE 0x800000
 
-//extern uint64_t kernel_stack;
 int register_syscall() {
   asm(
     "xor rax, rax;"
@@ -58,6 +57,7 @@ void switch_user(uint64_t argc, char *argv[]) {
   /* copy strings and argv onto user-accessible area */
   for(int i = 0; i < argc; i++)
     argv[i] = (char*) (argv[i] - (char*) argv + sp);
+  argv[argc] = 0;
   memcpy(s, argv, total_len);
   sys_execve(argv[0], (char**) sp, (char**) (sp + argc * sizeof(char*)));
 }
@@ -101,7 +101,6 @@ int kernel_main_tdx(uint64_t hob, uint64_t _payload) {
   tdvmcall_mapgpa(true,dma,DMA_SIZE);
   init_allocator_shared((void*)( dma | KERNEL_BASE_OFFSET), DMA_SIZE);
   memset((void*)( dma | KERNEL_BASE_OFFSET),0x0,DMA_SIZE);
-  
   write_in_console("Start setting gdt.\n");
   gdt = (struct gdt_entry *)(get_usable(PAGE_SIZE)|KERNEL_BASE_OFFSET);
   tss = (struct tss *)(get_usable(PAGE_SIZE)|KERNEL_BASE_OFFSET);
@@ -115,16 +114,16 @@ int kernel_main_tdx(uint64_t hob, uint64_t _payload) {
   idt_init(idt);
   write_in_console("Start enabling apic interrupt.\n");
   enable_apic_interrupt();
-
-  write_in_console("Start setting up stack and jump to new stack.\n");
+  if(register_syscall() != 0) return 1;
+  //write_in_console("Start setting up stack and jump to new stack.\n");
   //stack initialization
-  uint64_t stack = get_usable(STACK_SIZE)|KERNEL_BASE_OFFSET;
-  uint64_t stack_top = stack + STACK_SIZE;
+  //uint64_t stack = get_usable(STACK_SIZE)|KERNEL_BASE_OFFSET;
+  //uint64_t stack_top = stack + STACK_SIZE;
 
-  asm("mov rsp, %0;"
+  /*asm("mov rsp, %0;"
       "mov rbp, rsp;"
-       ::"r"(stack_top));
-  int parameters_argc = ARGC;
+       ::"r"(stack_top));*/
+  int parameters_argc = ARGC+1;
   int parameters_argv_len = ARGV_LEN;
   char* parameters = PARAMETERS;
   struct argv_struct{
@@ -132,15 +131,16 @@ int kernel_main_tdx(uint64_t hob, uint64_t _payload) {
     char buffer[parameters_argv_len];
   };
   struct argv_struct argvs;
-  memset(argvs.buffer,0x0,sizeof(argvs.buffer));
+  memset(&argvs,0x0,sizeof(argvs));
   memcpy(argvs.buffer,parameters,parameters_argv_len);
 
   int buffer_count = 0;
-  for(int i=0;i<parameters_argc;i++){
+  for(int i=0;i<parameters_argc-1;i++){
     argvs.argv[i] = &argvs.buffer[buffer_count];
     buffer_count = strlen(&argvs.buffer[buffer_count])+1;
   }
-  
-  switch_user(parameters_argc, argvs.argv);
+
+  argvs.argv[parameters_argc-1] = 0;
+  switch_user(parameters_argc-1, argvs.argv);
   return 0;
 }

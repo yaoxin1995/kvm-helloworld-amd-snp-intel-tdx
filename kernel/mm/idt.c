@@ -329,7 +329,6 @@ void __attribute__((ms_abi))virtualization_inner(struct InterruptNoErrorStack * 
         if(!handle_tdx_ioexit(&ve_info,stack)){
             tdvmcall_halt();
         }
-        write_in_console("ve for io handled\n");
         break;
     case EXIT_REASON_MSR_READ: {
         uint64_t msr = tdvmcall_rdmsr((uint32_t)stack->scratch.rcx);

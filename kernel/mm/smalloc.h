@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #define MALLOC_NO_ALIGN 0x0
+#define MALLOC_PAGE_ALIGN 0x1000
 
 void init_allocator_shared(void *addr, uint64_t len);
 

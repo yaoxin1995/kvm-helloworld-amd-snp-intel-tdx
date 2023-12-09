@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 void *mmap(void *addr, uint64_t len, int prot);
+void *mmap_shared(void *addr, uint64_t len, int prot) ;
 int mprotect(void *addr, uint64_t len, int prot);
 
 #endif
