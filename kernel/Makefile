@@ -12,7 +12,7 @@ LDFLAGS := -ffreestanding -fno-builtin -Tlinker.script
 all: $(TARGET)
 
 %.elf: $(SRCS) $(OBJS) $(SUBOBJS)
-	$(CC) $(CFLAGS) $^ -o $@ -Xlinker --oformat=elf64-x86-64 $(LDFLAGS)
+	$(CC) $(CFLAGS) $^ -o $@ -Xlinker --oformat=elf64-x86-64 $(LDFLAGS) -Bsymbolic -z notext
 
 %.o: %.s
 	$(AS) $^ -o $@
