@@ -31,13 +31,6 @@ int hp_handler(uint16_t nr, VM* vm) {
   handle(panic);
 
 #undef handle
-  case 0x3f8:
-    if(vm->run->io.direction==1){
-      return hp_handle_write(vm);
-    }
-    else{
-      return hp_handle_read(vm);
-    }
   default:
     return -ENOSYS;
   }
@@ -122,7 +115,7 @@ static int handle_rw(VM* vm, typeof(read) fptr) {
   static int ret = UNUSED_VAR;
   PROCESS {
     uint32_t offset = FETCH_U32;
-    const uint64_t *kbuf = (uint64_t*) (uint8_t*) vm->run + (uint64_t) offset;
+    const uint64_t *kbuf = (uint64_t*) MEM_AT(offset);
     int fd = (int) kbuf[0];
     uint64_t paddr = kbuf[1];
     uint64_t nbytes = kbuf[2];

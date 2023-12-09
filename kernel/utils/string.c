@@ -39,3 +39,34 @@ int memcmp(const void *s1, const void *s2, uint64_t n) {
   }
   return 0;
 }
+
+void HexToAscii(unsigned char *pHex, unsigned char *pAscii, int nLen)
+{
+    unsigned char Nibble[2];
+    unsigned int i,j;
+    for (i = 0; i < nLen; i++){
+        Nibble[0] = (pHex[i] & 0xF0) >> 4;
+        Nibble[1] = pHex[i] & 0x0F;
+        for (j = 0; j < 2; j++){
+            if (Nibble[j] < 10){            
+                Nibble[j] += 0x30;
+            }
+            else{
+                if (Nibble[j] < 16)
+                    Nibble[j] = Nibble[j] - 10 + 'A';
+            }
+            *pAscii++ = Nibble[j];
+        }               
+    }           
+}
+
+void uint64_to_string(uint64_t num,unsigned char* string){
+  HexToAscii((unsigned char *)&num,string,8);
+  for(int i=0;i<4;i++){
+    for(int j=0;j<2;j++){
+        char c = string[i*2+j];
+        string[i*2+j] = string[(7-i)*2+j];
+        string[(7-i)*2+j] = c;
+    }
+  }
+}

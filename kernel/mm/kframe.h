@@ -37,4 +37,14 @@ uint64_t kframe_allocate_shared();
 
 void kframe_free_shared(uint64_t address);
 
+uint64_t kframe_allocate_fixed_pt(uint64_t start, uint64_t count);
+
+uint64_t kframe_allocate_range_pt(uint64_t count);
+
+int kframe_allocator_init_pt(uint64_t frame_start, uint64_t size);
+
+void kframe_free_pt(uint64_t address);
+
+
+
 #endif

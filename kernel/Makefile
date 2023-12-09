@@ -1,18 +1,18 @@
-TARGET := kernel.bin
+TARGET := kernel.elf
 
 SRCS := entry.s kernel_main.c
 OBJS :=
 DEPS := $(wildcard ./**/*.d)
 SUBOBJS := syscalls/syscalls.a hypercalls/hypercalls.a mm/mm.a elf/elf.a utils/utils.a
 
-CFLAGS := -Wall -Werror -fPIE -pie -masm=intel -nostdlib -Os -I.
+CFLAGS := -Wall  -Werror -fPIE -pie -masm=intel -nostdlib -Os -I.
 LDFLAGS := -ffreestanding -fno-builtin -Tlinker.script
 
 .PRECIOUS: %.o
 all: $(TARGET)
 
-%.bin: $(SRCS) $(OBJS) $(SUBOBJS)
-	$(CC) $(CFLAGS) $^ -o $@ -Xlinker --oformat=binary $(LDFLAGS)
+%.elf: $(SRCS) $(OBJS) $(SUBOBJS)
+	$(CC) $(CFLAGS) $^ -o $@ -Xlinker --oformat=elf64-x86-64 $(LDFLAGS)
 
 %.o: %.s
 	$(AS) $^ -o $@

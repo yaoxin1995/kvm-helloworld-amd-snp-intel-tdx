@@ -12,8 +12,11 @@ typedef struct kframe_allocator {
 } kframe_alloc_t;
 
 #define SHARED_BITMAP_SIZE 4096
+#define PAGE_TABLE_BITMAP_SIZE 0x800
 static kframe_alloc_t shared_allocator;
+static kframe_alloc_t page_table_allocator;
 uint8_t shared_bitmap[SHARED_BITMAP_SIZE];
+uint8_t page_table_bitmap[PAGE_TABLE_BITMAP_SIZE];
 
 int kframe_allocator_init(kframe_alloc_t *fa, uint64_t bitmap_frame, uint64_t bitmap_count, uint64_t frame_start, uint64_t size)
 {
@@ -25,7 +28,7 @@ int kframe_allocator_init(kframe_alloc_t *fa, uint64_t bitmap_frame, uint64_t bi
 	fa->available_frame_count = fa->bitmap_count = bitmap_count;
 
 	for(uint64_t i=0; i < fa->bitmap_count; i++) {
-		fa->bitmap_frame[i] = 0x1;
+		fa->bitmap_frame[i] = 0x0;//Should be 0x0?
 	}
 
 	for(int i=0; i < KFRAME_CACHE_SIZE; i++) {
@@ -81,7 +84,7 @@ uint64_t kframe_allocate(kframe_alloc_t *fa)
 
 	}
 
-	for(int i=0; i < KFRAME_CACHE_SIZE; i++) {
+	for(int i=0; i < KFRAME_CACHE_SIZE; i++) {//Should it be if()
 		t_frame = kframe_allocate_single_frame(fa);
 		if (t_frame == 0) break;
 		fa->kframe_cache[in_cache] = t_frame;
@@ -90,8 +93,8 @@ uint64_t kframe_allocate(kframe_alloc_t *fa)
 	}
 
 	if (in_cache == 0) return 0x0;
-
-	for(uint64_t i = 0; i < KFRAME_CACHE_AVAILABLE; i++) {
+	//Get a frame in cache.
+	for(uint64_t i = 0; i < KFRAME_CACHE_AVAILABLE; i++) {//i<0? should be KFRAME_CACHE_SIZE?
 		if (fa->kframe_cache_used[i] == KFRAME_CACHE_EMPTY) {
 			t_frame = fa->kframe_cache[i];
 			fa->kframe_cache_used[i] = KFRAME_CACHE_AVAILABLE;
@@ -142,7 +145,7 @@ uint64_t kframe_allocate_fixed(kframe_alloc_t *fa, uint64_t start, uint64_t coun
 
 	//atomic_lock(&fa->frame_lock);
 	for (uint64_t i=0; i < count; i++) {
-		if (fa->bitmap_frame[i] == 0x1) {
+		if (fa->bitmap_frame[index + i] == 0x1) {
 			//atomic_unlock(&fa->frame_lock)
 			return (-1ULL);
 		}
@@ -176,7 +179,7 @@ uint64_t kframe_allocate_range(kframe_alloc_t *fa, uint64_t count)
 		fa->kframe_cache[i] = 0x0;
 	}
 	//search the frame bitmap
-	for (uint64_t i=0, count=0; i < fa->frame_count; i++) {
+	for (uint64_t i=0; i < fa->frame_count; i++) {
 		if (fa->bitmap_frame[i] == 0x0) {
 			target = (target == (-1ULL)) ? (i*KFRAME_SIZE + fa->frame_start): target;
 			l_count++;
@@ -201,18 +204,39 @@ uint64_t kframe_allocate_fixed_shared(uint64_t start, uint64_t count)
 	return kframe_allocate_fixed(&shared_allocator, start, count);
 }
 
-uint64_t kframe_allocate_shared(uint64_t start, uint64_t count)
+uint64_t kframe_allocate_range_shared(uint64_t count)
 {
-	return kframe_allocate(&shared_allocator, count);
+	return kframe_allocate_range(&shared_allocator, count);
 }
 
 int kframe_allocator_init_shared(uint64_t frame_start, uint64_t size)
 {
-	return kframe_allocator_init(&shared_allocator, shared_bitmap, SHARED_BITMAP_SIZE, frame_start, size);
+	return kframe_allocator_init(&shared_allocator, (uint64_t)shared_bitmap, SHARED_BITMAP_SIZE, frame_start, size);
 }
 void kframe_free_shared(uint64_t address) 
 {
-	kframe_free(&shared_allocator, uint64_t address) 
+	kframe_free(&shared_allocator, address);
+}
+
+
+uint64_t kframe_allocate_fixed_pt(uint64_t start, uint64_t count)
+{
+	return kframe_allocate_fixed(&page_table_allocator, start, count);
+}
+
+uint64_t kframe_allocate_range_pt(uint64_t count)
+{
+	return kframe_allocate_range(&page_table_allocator, count);
+}
+
+int kframe_allocator_init_pt(uint64_t frame_start, uint64_t size)
+{
+	return kframe_allocator_init(&page_table_allocator, (uint64_t)page_table_bitmap, PAGE_TABLE_BITMAP_SIZE, frame_start, size);
+}
+
+void kframe_free_pt(uint64_t address) 
+{
+	kframe_free(&page_table_allocator, address);
 }
 
 

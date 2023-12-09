@@ -1,5 +1,6 @@
 #include <elf/elf.h>
 #include <hypercalls/hp_read.h>
+#include <mm/smalloc.h>
 #include <mm/kmalloc.h>
 #include <mm/mmap.h>
 #include <mm/translate.h>
@@ -14,11 +15,13 @@
 #include <utils/string.h>
 
 static int load_binary(int fd, process* p) {
-  void *buf = kmalloc(0x1000, MALLOC_NO_ALIGN);
+  write_in_console("Start reading binary from hypervisor\n");
+  void *buf = smalloc(0x1000, MALLOC_NO_ALIGN);
   hp_read(fd, physical(buf), 0x1000);
   Elf64_Ehdr *ehdr = (Elf64_Ehdr*) buf;
   if(memcmp(ehdr->e_ident, "\177ELF\x02\x01\x01\0\0\0\0\0\0\0\0\0", 16) != 0)
     return -ENOEXEC;
+  write_in_console("load_binary 1\n");
   p->entry = ehdr->e_entry;
   p->load_addr = 0;
   if(ehdr->e_type != ET_EXEC && ehdr->e_type != ET_DYN) return -ENOEXEC;
@@ -27,6 +30,8 @@ static int load_binary(int fd, process* p) {
   if(ehdr->e_phentsize != sizeof(Elf64_Phdr)) return -EINVAL;
   if(ehdr->e_phoff + (uint64_t) ehdr->e_phentsize * ehdr->e_phnum > 0x1000)
     return -EINVAL;
+
+  write_in_console("load_binary 2\n");
   Elf64_Phdr *phdr = (Elf64_Phdr*) ((uint8_t*) buf + ehdr->e_phoff);
   for(int i = 0; i < ehdr->e_phnum; i++, phdr++)
     if(phdr->p_type == PT_LOAD) {
@@ -35,6 +40,7 @@ static int load_binary(int fd, process* p) {
                ed = p->load_addr + alignup(phdr->p_vaddr + sz);
       int prot = pf_to_prot(phdr->p_flags);
       /* not a good idea, but it works */
+      write_in_console("load_binary 3\n");
       void *r = sys_mmap(
         (void*) st, sz + (phdr->p_offset & 0xfff), prot,
         MAP_FIXED, fd, phdr->p_offset & -0x1000
@@ -114,10 +120,13 @@ static int create_elf_info(process *p, char *const argv[], char *const envp[]) {
 int sys_execve(const char *path, char *const argv[], char *const envp[]) {
   int fd = sys_open(path);
   if(fd < 0) return fd;
+  write_in_console("1\n");
   process p;
   int ret = load_binary(fd, &p);
+  write_in_console("2\n");
   if(ret < 0) return ret;
   sys_close(fd);
+    write_in_console("3\n");
   if(create_elf_info(&p, argv, envp)) return -EFAULT;
   /* this is an execve call so we can ignore the saved registers (rip, rsp) */
   asm volatile(

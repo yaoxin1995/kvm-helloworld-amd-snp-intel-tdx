@@ -1337,6 +1337,7 @@ void execute(VM *vm)
 
   do{
     ret = -1;
+    vm->run->exit_reason=0;
     run_ret=ioctl(vm->vcpufd, KVM_RUN, NULL);
 
 
@@ -1372,8 +1373,6 @@ void execute(VM *vm)
       fprintf(stderr, "KVM_EXIT_HLT\n");
       break;
     case KVM_EXIT_IO:
-      if (!check_iopl(vm))
-        error("KVM_EXIT_SHUTDOWN\n");
       switch (vm->run->io.port)
       {
       case 0x3f8:
@@ -1402,7 +1401,14 @@ void execute(VM *vm)
         }
         break;
       default:
-        error("Unhandled I/O port: 0x%x\n", vm->run->io.port);
+        if(vm->run->io.port & HP_NR_MARK) {
+          if(hp_handler(vm->run->io.port, vm) < 0){
+            error("Hypercall failed\n");
+          }
+          ret = 0; 
+        }else {
+          error("Unhandled I/O port: 0x%x\n", vm->run->io.port);
+        }
         break;
       }
       break;
