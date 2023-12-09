@@ -1,9 +1,9 @@
+#ifndef __IDT_H
+#define __IDT_H
 #include <stdint.h>
 #include <utils/panic.h>
 #include <utils/tdx.h>
 #include <utils/string.h>
-#ifndef __IDT_H 
-#define __IDT_H 
 
 
 #define EXIT_REASON_CPUID 10
@@ -125,11 +125,12 @@ struct DescriptorTablePointer {
             SCRATCH_PUSH() \
             PRESERVED_PUSH() \
             "mov rcx, rsp;" \
-            "call %0;" \
+            "lea rax, %a0;" \
+            "call rax;" \
             PRESERVED_POP() \
             SCRATCH_POP() \
             asm_epilogue \
-            :: "i" (func) \
+            :: "p" (func) \
             ); \
     };
 
@@ -151,6 +152,6 @@ struct DescriptorTablePointer {
 #define TRAP       0xF
 
 static struct idt_entry* idt;
+void idt_init(struct idt_entry* allocated_idt);
 #endif
 
-void idt_init(struct idt_entry* allocated_idt);

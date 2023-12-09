@@ -5,7 +5,7 @@ OBJS :=
 DEPS := $(wildcard ./**/*.d)
 SUBOBJS := syscalls/syscalls.a hypercalls/hypercalls.a mm/mm.a elf/elf.a utils/utils.a
 
-CFLAGS := -Wall  -Werror -fPIE -pie -masm=intel -nostdlib -Os -I.
+CFLAGS := -Wall  -Werror -fPIE -pie -masm=intel -m64 -nostdlib -Os -I. -mcmodel=small -static-pie
 LDFLAGS := -ffreestanding -fno-builtin -Tlinker.script
 
 .PRECIOUS: %.o

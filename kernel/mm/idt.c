@@ -331,23 +331,26 @@ void __attribute__((ms_abi))virtualization_inner(struct InterruptNoErrorStack * 
         }
         write_in_console("ve for io handled\n");
         break;
-    case EXIT_REASON_MSR_READ:
+    case EXIT_REASON_MSR_READ: {
         uint64_t msr = tdvmcall_rdmsr((uint32_t)stack->scratch.rcx);
         stack->scratch.rax = (uint64_t)(((uint32_t)msr)&0xffffffff);
         stack->scratch.rdx = (uint64_t)(((uint32_t)(msr>>32))&0xffffffff);
+	}
         break;
-    case EXIT_REASON_MSR_WRITE:
+    case EXIT_REASON_MSR_WRITE: {
         uint64_t data = (uint64_t)stack->scratch.rax  | (((uint64_t)stack->scratch.rdx) << 32);
         tdvmcall_wrmsr((uint32_t)stack->scratch.rcx,data);
+	}
         break;
-    case EXIT_REASON_CPUID:
+    case EXIT_REASON_CPUID: {
         struct CpuIdInfo cpuid = tdvmcall_cpuid((uint32_t)stack->scratch.rax, (uint32_t)stack->scratch.rcx);
         uint64_t mask = 0xffffffff00000000;
         stack->scratch.rax = (stack->scratch.rax & mask) | (uint64_t)cpuid.eax;
         stack->preserved.rbx = (stack->preserved.rbx & mask) | (uint64_t)cpuid.ebx;
         stack->scratch.rcx = (stack->scratch.rcx & mask) | (uint64_t)cpuid.ecx;
         stack->scratch.rdx = (stack->scratch.rdx & mask) | (uint64_t)cpuid.edx;
-        break;
+	}
+	break;
     case EXIT_REASON_VMCALL:
     case EXIT_REASON_MWAIT_INSTRUCTION:
     case EXIT_REASON_MONITOR_INSTRUCTION:
