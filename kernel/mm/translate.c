@@ -4,107 +4,7 @@
 #include <mm/kframe.h>
 #include <utils/string.h>
 #include <utils/tdx.h>
-/* Maps
- *  0 ~ 0x800000 -> 0 ~ 0x800000 with kernel privilege
- *  0x7DDDE000 ~ 0x80000000 -> 0x7DDDE000 ~ 0x80000000 bios related stack etc. 
- *  0xff000000 ~ 0xffffffff -> 0xff000000 ~ 0xffffffff bios
- *  0x8000000000 ~ 0x8080000000 -> 0 ~ 0x80000000 ram
- */
-void init_pagetable() {
-  uint64_t* pml4 = (uint64_t*)kframe_allocate_range_pt(1);
-  uint64_t* pdp0 = (uint64_t*)kframe_allocate_range_pt(1);
-  uint64_t* pdp1 = (uint64_t*)kframe_allocate_range_pt(1);
-  uint64_t* pd0_0 = (uint64_t*)kframe_allocate_range_pt(1);
-  uint64_t* pd0_1 = (uint64_t*)kframe_allocate_range_pt(1);
-  uint64_t* pd0_3 = (uint64_t*)kframe_allocate_range_pt(1);
-  uint64_t* pd1_0 = (uint64_t*)kframe_allocate_range_pt(1);
-  uint64_t* pd1_1 = (uint64_t*)kframe_allocate_range_pt(1);
-  unsigned char buffer[20] = {0};
 
-  uint64_t cr4;
-  asm volatile ("mov %[cr4], cr4 ":[cr4]"=r"(cr4));
-  uint64_to_string(cr4,buffer);
-  write_in_console("cr4: 0x");
-  write_in_console((char*)buffer);
-  write_in_console("\n");
-  
-  uint64_t efer_msr;
-  efer_msr = tdvmcall_rdmsr(IA32_EFER);
-  uint64_to_string(efer_msr,buffer);
-  write_in_console("efer_msr: 0x");
-  write_in_console((char*)buffer);
-  write_in_console("\n");
-
-  //0 ~ 0x800000 -> 0 ~ 0x800000 with kernel privilege for page table
-  pml4[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER |(uint64_t) pdp0;
-  pdp0[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER |(uint64_t) pd0_0;
-  for(uint64_t i = 0; i < 4; i++){
-    uint64_t* pt = (uint64_t*)kframe_allocate_range_pt(1);
-    pd0_0[i] = PDE64_PRESENT | PDE64_RW |(uint64_t) pt;
-    for(uint64_t j = 0; j < 0x200; j++){
-      pt[j] = PDE64_PRESENT | PDE64_RW | (i * PT_MAPPING_SIZE + j * PAGE_SIZE);
-    }
-  }
-  //0x7DDDE000~0x80000000 ->0x7DDDE000~0x80000000 bios related stack etc. 
-  uint64_t* pt_temp = (uint64_t*)kframe_allocate_range_pt(1);
-  pdp0[1] = PDE64_PRESENT | PDE64_RW | PDE64_USER |(uint64_t) pd0_1;
-  pd0_1[0x1ee] = PDE64_PRESENT | PDE64_RW |(uint64_t) pt_temp;
-  for(int i=0x1de;i<0x200;i++){
-    pt_temp[i] = PDE64_PRESENT | PDE64_RW | (0x1ee * PT_MAPPING_SIZE+0x40000000 + i * PAGE_SIZE);
-  }
-  for(uint64_t i= 0x1ef;i<0x200;i++){
-    uint64_t* pt = (uint64_t*)kframe_allocate_range_pt(1);
-    pd0_1[i] = PDE64_PRESENT | PDE64_RW |(uint64_t) pt;
-    for(uint64_t j = 0; j < 0x200; j++){
-      pt[j] = PDE64_PRESENT | PDE64_RW | (i * PT_MAPPING_SIZE+0x40000000 + j * PAGE_SIZE);
-    }
-  }
- 
-  //0xff000000 ~ 0xffffffff -> 0xff000000 ~ 0xffffffff bios
-  pdp0[3] = PDE64_PRESENT | PDE64_RW | (uint64_t) pd0_3;
-  for(uint64_t i = 0x1f8; i < 0x200; i++){
-    uint64_t* pt = (uint64_t*)kframe_allocate_range_pt(1);
-    pd0_3[i] = PDE64_PRESENT | PDE64_RW | (uint64_t) pt;
-    for(uint64_t j = 0; j < 0x200; j++){
-      pt[j] = PDE64_PRESENT | PDE64_RW | ((i + 0x600) * PT_MAPPING_SIZE + j * PAGE_SIZE);
-    }
-  }
-
-  //0x8000000000 ~ 0x8080000000 -> 0 ~ 0x80000000 ram
-  pml4[1] = PDE64_PRESENT | PDE64_RW | (uint64_t) pdp1;
-  pdp1[0] = PDE64_PRESENT | PDE64_RW | (uint64_t) pd1_0;
-  pdp1[1] = PDE64_PRESENT | PDE64_RW | (uint64_t) pd1_1;
-
-  for(uint64_t i = 0; i < 0x200; i++){
-    uint64_t* pt = (uint64_t*)kframe_allocate_range_pt(1);
-    pd1_0[i] = PDE64_PRESENT | PDE64_RW | (uint64_t) pt;
-    for(uint64_t j = 0; j < 0x200; j++){
-      pt[j] = PDE64_PRESENT | PDE64_RW | (i * PT_MAPPING_SIZE + j * PAGE_SIZE);
-    }
-  }
-  
-  for(uint64_t i = 0; i < 0x200; i++){
-    uint64_t* pt = (uint64_t*)kframe_allocate_range_pt(1);
-    pd1_1[i] = PDE64_PRESENT | PDE64_RW | (uint64_t) pt;
-    for(uint64_t j = 0; j < 0x200; j++){
-      pt[j] = PDE64_PRESENT | PDE64_RW | ((i + 0x200) * PT_MAPPING_SIZE + j * PAGE_SIZE);
-    }
-  }
-  
-  //EFER_LME | EFER_LMA| EFER_SCE have been set, just set new cr3
-
-  
-  uint64_to_string((uint64_t)pml4,buffer);
-  write_in_console("pml4 address: 0x");
-  write_in_console((char*)buffer);
-  write_in_console("\n");
-  
-  asm volatile ("mov cr3, %[pml4]": : [pml4]"r"(pml4));
-  
-  
-}
- 
-  
 
 static inline uint64_t* get_pml4_addr() {
   uint64_t pml4;
@@ -131,7 +31,7 @@ void add_trans_user(void* vaddr_, void* paddr_, int prot) {
       c = (uint64_t*) kframe_allocate_range_pt(1); \
       *p = PDE64_PRESENT | PDE64_RW | PDE64_USER |(uint64_t) c; \
     } else { \
-      if(!(*p & PDE64_USER)) panic("translate.c#add_trans_user: invalid address"); \
+      if(!(*p & PDE64_USER))  *p |=PDE64_USER; \
       c = (uint64_t*) ((*p & -0x1000) | KERNEL_BASE_OFFSET); \
     } \
   } while(0);

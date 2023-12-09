@@ -34,7 +34,6 @@
   ((uint64_t)(v) >> 48) == 0 && \
   ((uint64_t)(v) >> 39) != 1)
 
-void init_pagetable();
 
 uint64_t translate(void* vaddr, int usermode, int writable);
 uint64_t physical(void *vaddr);

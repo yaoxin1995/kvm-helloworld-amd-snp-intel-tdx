@@ -1,7 +1,7 @@
-.globl hlt, init_kernel_page_tables
+.globl hlt, init_kernel_page_tables, pml4
 .extern kernel_main_tdx
-.extern kernel_test
 .extern init_kernel_page_tables
+.extern pml4
 .intel_syntax noprefix
 _start:
 #  mov rdx, [rsp] /* argc */
@@ -15,8 +15,10 @@ _start:
 #  stack should be 16 byte aligned
 
    callq [rip + init_kernel_page_tables];
-
+   
 # enable page tables
+   mov rax, QWORD PTR [rip+pml4]
+   mov cr3, rax
 # enable cache
 # all is good. now go to the kernel start
 

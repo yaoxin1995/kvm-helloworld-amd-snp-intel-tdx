@@ -4,7 +4,7 @@
 #include <mm/translate.h>
 #include <syscalls/sys_execve.h>
 #include <utils/string.h>
-#include <mm/td-hob.h>
+#include <mm/init_pt.h>
 #include <mm/smalloc.h>
 #include <utils/tdx.h>
 #include <mm/gdt.h>
@@ -19,7 +19,6 @@
 #define DMA_SIZE 0x100000
 #define STACK_SIZE 0x800000
 
-static struct e820_entry memory_map[128];
 //extern uint64_t kernel_stack;
 int register_syscall() {
   asm(
@@ -63,7 +62,7 @@ void switch_user(uint64_t argc, char *argv[]) {
 }
 
 int kernel_main(void* addr, uint64_t len, uint64_t argc, char *argv[]) {
-  init_pagetable();
+  //init_pagetable();
   /* new paging enabled! */
   init_allocator((void*) ((uint64_t) addr | KERNEL_BASE_OFFSET), len);
   if(register_syscall() != 0) return 1;
@@ -87,69 +86,29 @@ int kernel_test(uint64_t hob, uint64_t _payload){
 }
 int kernel_main_tdx(uint64_t hob, uint64_t _payload) {
 
-  write_in_console("Strat hob parsing to get e820 table in kernel.\n");
-  unsigned char buffer[20] = {0};
-  uint64_to_string(hob,buffer);
-  write_in_console("Parameters: hob: 0x");
-  write_in_console((char*)buffer);
-  write_in_console(", _payload: 0x");
-  uint64_to_string(_payload,buffer);
-  write_in_console((char*)buffer);
-  write_in_console("\n");
-
-
-  uint64_t hob_size =  parse_hob_get_size(hob);
-
-  write_in_console("Get hob size: 0x");
-  uint64_to_string(hob_size,buffer);
-  write_in_console((char*)buffer);
-  write_in_console("\n");
-
-  struct e820_table parsed_e820_table = get_e820_table_from_hob((uint8_t *)hob,hob_size);
-
-  write_in_console("Get parsed_e820_table, number of entries: 0x");
-  uint64_to_string(parsed_e820_table.num_entries,buffer);
-  write_in_console((char*)buffer);
-  write_in_console("\n");
-
-  uint64_to_string((uint64_t)&memory_map,buffer);
-  write_in_console("Memory map location: 0x");
-  write_in_console((char*)buffer);
-  write_in_console("\n");
-
-  memcpy(memory_map,parsed_e820_table.e820_entry,parsed_e820_table.num_entries * sizeof(struct e820_entry));
-  write_in_console("Parsing e820 table finished.Memory map was initialized.\n");
+  //unsigned char buffer[20] = {0};
   
-  write_in_console("Start setting up page table.\n");
-  uint64_t page_table = get_usable(KERNEL_PAGING_SIZE,memory_map,parsed_e820_table.num_entries);
-  kframe_allocator_init_pt(page_table,KERNEL_PAGING_SIZE);
-  memset((uint64_t*)page_table,0x0,KERNEL_PAGING_SIZE);
-  init_pagetable();
   write_in_console("Setting up page table finished.\n");
-  uint64_to_string((uint64_t)&memory_map,buffer);
-  write_in_console("Memory map location: 0x");
-  write_in_console((char*)buffer);
-  write_in_console("\n");
-  
+
   write_in_console("Start setting up heap.\n");
-  uint64_t heap = get_usable(HEAP_SIZE,memory_map,parsed_e820_table.num_entries);
+  uint64_t heap = get_usable(HEAP_SIZE);
   init_allocator((void*) ( heap | KERNEL_BASE_OFFSET), HEAP_SIZE);
 
   write_in_console("Start setting up dma.\n");
-  uint64_t dma = get_usable(DMA_SIZE,memory_map,parsed_e820_table.num_entries);
+  uint64_t dma = get_usable(DMA_SIZE);
   set_shared_bit((uint64_t*)(dma | KERNEL_BASE_OFFSET),DMA_SIZE);
   tdvmcall_mapgpa(true,dma,DMA_SIZE);
   init_allocator_shared((void*)( dma | KERNEL_BASE_OFFSET), DMA_SIZE);
 
   write_in_console("Start setting gdt.\n");
-  gdt = (struct gdt_entry *)(get_usable(PAGE_SIZE,memory_map,parsed_e820_table.num_entries)|KERNEL_BASE_OFFSET);
-  tss = (struct tss *)(get_usable(PAGE_SIZE,memory_map,parsed_e820_table.num_entries)|KERNEL_BASE_OFFSET);
+  gdt = (struct gdt_entry *)(get_usable(PAGE_SIZE)|KERNEL_BASE_OFFSET);
+  tss = (struct tss *)(get_usable(PAGE_SIZE)|KERNEL_BASE_OFFSET);
   memset((uint64_t*)gdt,0x0,PAGE_SIZE);
   memset((uint64_t*)tss,0x0,PAGE_SIZE);
   init_gdt(gdt,tss);
 
   write_in_console("Start setting idt.\n");
-  idt = (struct idt_entry*)(get_usable(PAGE_SIZE,memory_map,parsed_e820_table.num_entries)|KERNEL_BASE_OFFSET);
+  idt = (struct idt_entry*)(get_usable(PAGE_SIZE)|KERNEL_BASE_OFFSET);
   memset(idt,0x0,PAGE_SIZE);
   idt_init(idt);
   write_in_console("Start enabling apic interrupt.\n");
@@ -157,7 +116,7 @@ int kernel_main_tdx(uint64_t hob, uint64_t _payload) {
 
   write_in_console("Start setting up stack and jump to new stack.\n");
   //stack initialization
-  uint64_t stack = get_usable(STACK_SIZE,memory_map,parsed_e820_table.num_entries)|KERNEL_BASE_OFFSET;
+  uint64_t stack = get_usable(STACK_SIZE)|KERNEL_BASE_OFFSET;
   uint64_t stack_top = stack + STACK_SIZE;
 
   asm("mov rsp, %0"::"r"(stack_top));
@@ -171,6 +130,7 @@ int kernel_main_tdx(uint64_t hob, uint64_t _payload) {
   memcpy(argvs.buffer,string,24);
   argvs.argv[0] = argvs.buffer;
   argvs.argv[1] = &argvs.buffer[11];
+  
   switch_user(2, argvs.argv);
   return 0;
 }

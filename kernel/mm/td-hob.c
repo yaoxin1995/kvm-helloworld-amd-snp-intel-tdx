@@ -75,14 +75,3 @@ struct e820_table get_e820_table_from_hob(uint8_t *hob,uint64_t hob_size){
 
 
 
-uint64_t get_usable(uint64_t size, struct e820_entry * memory_map, int num_entries){
-    for(int i=0;i<num_entries;i++){
-        if(memory_map[i].type == E820_RAM && memory_map[i].length >=size){
-            memory_map[i].address += size;
-            memory_map[i].length -= size;
-            return memory_map[i].address-size;
-        }
-    }
-    panic("Out of memory, cannot get usable memory.");
-    return -1;
-}
