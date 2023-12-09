@@ -15,6 +15,8 @@
 #include "tdvf-hob.h"
 #include <glib.h>
 #include "pc_sysfw_ovmf.h"
+#include "e820_memory_layout.h"
+
 
 #define MSR_IA32_APICBASE 0x1b
 #define X2APIC 21
@@ -24,6 +26,7 @@
 #define APIC_DEFAULT_ADDRESS 0xfee00000
 #define PS_LIMIT (0x200000)
 #define KERNEL_STACK_SIZE (0x4000)
+#define PAGE_ALIGN(address) ((__u64)address)%4096==0?((__u64)address):((((__u64)address)/4096)+1)*4096
 
 #define TDG_VP_VMCALL_INVALID_OPERAND 0x8000000000000000ULL
 #define TDG_VP_VMCALL_MAP_GPA 0x10001ULL
@@ -35,12 +38,25 @@
  */
 #define PAGE_TABLE_SIZE (0x5000)
 #define MAX_KERNEL_SIZE (PS_LIMIT - PAGE_TABLE_SIZE - KERNEL_STACK_SIZE)
-#define MEM_SIZE 0x100000000// 4GB  
+#define MEM_SIZE 0x80000000 
 #define BIT(nr) (0x1UL << (nr))
 
+#define __X32_SYSCALL_BIT	0x40000000
+#define __NR_memfd_restricted 451
+#define U_CET_MASK BIT(11)
+#define S_CET_MASK BIT(12)
+#define XSS_LBRS_MASK BIT(15)
+#define XSAVE_XSS_MASK U_CET_MASK|XSS_LBRS_MASK
+#define ALIGN_DOWN(n, m) ((n) / (m) * (m))
+#define ALIGN_UP(n, m) ALIGN_DOWN((n) + (m) - 1, (m))
 
+#define QEMU_MAP_READONLY   (1 << 0)
+#define QEMU_MAP_SHARED     (1 << 1)
+#define QEMU_MAP_SYNC       (1 << 2)
+#define QEMU_MAP_NORESERVE  (1 << 3)
 
 static TdxGuest *tdx_guest;
+static struct kvm_tdx_capabilities *tdx_caps;
 void read_file(const char *filename, uint8_t **content_ptr, size_t *size_ptr)
 {
   FILE *f = fopen(filename, "rb");
@@ -154,23 +170,57 @@ void setup_long_mode(VM *vm)
   setup_paging(vm);
   setup_seg_regs(vm);
 }
-
-int get_tdx_capabilities(int vmfd, struct kvm_tdx_capabilities *caps)
+int64_t get_image_size(const char *filename)
 {
+    int fd;
+    int64_t size;
+    fd = open(filename, O_RDONLY | 0);
+    if (fd < 0)
+        return -1;
+    size = lseek(fd, 0, SEEK_END);
+    close(fd);
+    return size;
+}
+ssize_t load_image_size(const char *filename, void *addr, size_t size)
+{
+    int fd;
+    ssize_t actsize, l = 0;
+
+    fd = open(filename, O_RDONLY | 0);
+    if (fd < 0) {
+        return -1;
+    }
+
+    while ((actsize = read(fd, addr + l, size - l)) > 0) {
+        l += actsize;
+    }
+
+    close(fd);
+
+    return actsize < 0 ? -1 : l;
+}
+
+int get_tdx_capabilities(int vmfd)
+{ 
+  struct kvm_tdx_capabilities *caps;
   int r, nr_cpuid_configs;
   nr_cpuid_configs = 6; // Tdx first generation;
   struct kvm_tdx_cmd cmd;
   memset(&cmd, 0x0, sizeof(cmd));
   cmd.id = KVM_TDX_CAPABILITIES;
-  cmd.data = (__u64)caps;
+  
   do
   {
     int size = sizeof(struct kvm_tdx_capabilities) +
                nr_cpuid_configs * sizeof(struct kvm_tdx_cpuid_config);
     caps = (struct kvm_tdx_capabilities *)malloc(size);
     memset(caps, 0x0, size);
-    r = ioctl(vmfd, KVM_MEMORY_ENCRYPT_OP, cmd);
+    cmd.data = (__u64)caps;
     caps->nr_cpuid_configs = nr_cpuid_configs;
+    r = ioctl(vmfd, KVM_MEMORY_ENCRYPT_OP, &cmd);
+    if( r == -1){
+        r = -errno;
+    }
     if (r == -E2BIG)
     {
       free(caps);
@@ -179,6 +229,7 @@ int get_tdx_capabilities(int vmfd, struct kvm_tdx_capabilities *caps)
   } while (r == -E2BIG);
   if (r)
     free(caps);
+  tdx_caps = caps;
   return r;
 }
 
@@ -188,7 +239,7 @@ int set_kvm_max_vcpu(int vmfd, int max_vcpu)
   memset(&enabled_cap, 0x0, sizeof(enabled_cap));
   enabled_cap.cap = KVM_CAP_MAX_VCPUS;
   enabled_cap.args[0] = max_vcpu;
-  int r = ioctl(vmfd, KVM_ENABLE_CAP, enabled_cap);
+  int r = ioctl(vmfd, KVM_ENABLE_CAP, &enabled_cap);
   return r;
 }
 
@@ -198,7 +249,16 @@ int initialize_tdx_vm(int vmfd, struct kvm_tdx_init_vm *vm_paras)
   memset(&cmd, 0x0, sizeof(cmd));
   cmd.id = KVM_TDX_INIT_VM;
   cmd.data = (__u64)vm_paras;
-  int r = ioctl(vmfd, KVM_MEMORY_ENCRYPT_OP, cmd);
+  int r = ioctl(vmfd, KVM_MEMORY_ENCRYPT_OP, &cmd);
+  return r;
+}
+
+int kvm_vm_enable_cap(int fd,unsigned int cap, unsigned long long arg0){
+  struct kvm_enable_cap enabled_cap;
+  memset(&enabled_cap, 0x0, sizeof(enabled_cap));
+  enabled_cap.cap = cap;
+  enabled_cap.args[0] = arg0;
+  int r = ioctl(fd, KVM_ENABLE_CAP, &enabled_cap);
   return r;
 }
 
@@ -208,60 +268,64 @@ int tdx_vcpu_init(int vcpufd, __u64 vcpu_rcx)
   memset(&cmd, 0x0, sizeof(cmd));
   cmd.id = KVM_TDX_INIT_VCPU;
   cmd.data = vcpu_rcx;
-  int r = ioctl(vcpufd, KVM_MEMORY_ENCRYPT_OP, cmd);
+  int r = ioctl(vcpufd, KVM_MEMORY_ENCRYPT_OP, &cmd);
   return r;
 }
 
 
-int get_tdx_cpuid(int kvmfd,struct kvm_cpuid2 *cpuid)
+int get_tdx_cpuid(int kvmfd,struct kvm_cpuid2 **cpuid)
 {
-  int number = 10;
+  struct kvm_cpuid2 *cpuid_try;
+  int number = 1;
   int r;
   do{
-    cpuid = (struct kvm_cpuid2 *)malloc(sizeof(struct kvm_cpuid2)+sizeof(struct kvm_cpuid_entry2)*number);
-    cpuid->nent = number;
-    r = ioctl(kvmfd,KVM_GET_SUPPORTED_CPUID,cpuid);
+    cpuid_try = (struct kvm_cpuid2 *)malloc(sizeof(struct kvm_cpuid2)+sizeof(struct kvm_cpuid_entry2)*number);
+    cpuid_try->nent = number;
+    r = ioctl(kvmfd,KVM_GET_SUPPORTED_CPUID,cpuid_try);
     if(r < 0){
+        r = -errno;
         if(r == -E2BIG){
-            free(cpuid);
-            number += 5;
+            free(cpuid_try);
+            number *=2;
         }
-        if(r == -ENOMEM){
-            free(cpuid);
-            number -= 3;
+        else if(r == -ENOMEM){
+            free(cpuid_try);
+            number -= 10;
         }
         else{
-            free(cpuid);
+            free(cpuid_try);
             return -1;
         }
     }
   }while(r < 0);
+  *cpuid = cpuid_try;
   return 0;
 }
 
-int enalbe_x2apic(int vcpufd, int kvmfd)
+int enable_x2apic(int vcpufd, int kvmfd)
 {
   struct kvm_cpuid2 *cpuid;
-  int r = get_tdx_cpuid(kvmfd, cpuid);
+  int r = get_tdx_cpuid(kvmfd, &cpuid);
   if(r < 0){
     pexit("Get supported CPUID failed");
   }
   cpuid->entries[0x1].ecx |= BIT(X2APIC);
   r = ioctl(vcpufd, KVM_SET_CPUID2, cpuid);
+  printf("nent: %d\n",cpuid->nent);
   free(cpuid);
   return r;
 }
 
 
-int encrypt_tdx_memory(int vcpufd, void *mem_region, int len, int flag)
+int encrypt_tdx_memory(int vmfd, void *mem_region, int flag)
 {
   
   struct kvm_tdx_cmd cmd;
   memset(&cmd, 0x0, sizeof(cmd));
-  cmd.id = KVM_TDX_INIT_VCPU;
+  cmd.id = KVM_TDX_INIT_MEM_REGION;
   cmd.data = (__u64)mem_region;
   cmd.flags = flag;
-  int r = ioctl(vcpufd, KVM_MEMORY_ENCRYPT_OP, cmd);
+  int r = ioctl(vmfd, KVM_MEMORY_ENCRYPT_OP, &cmd);
   return r;
 }
 
@@ -270,18 +334,20 @@ int finalize_td(int vmfd)
   struct kvm_tdx_cmd cmd;
   memset(&cmd, 0x0, sizeof(cmd));
   cmd.id = KVM_TDX_FINALIZE_VM;
-  int r = ioctl(vmfd, KVM_MEMORY_ENCRYPT_OP, cmd);
+  int r = ioctl(vmfd, KVM_MEMORY_ENCRYPT_OP, &cmd);
   return r;
 }
 
 void set_para_cpuid(struct kvm_tdx_init_vm *para, struct kvm_tdx_capabilities *caps)
 {
+  //Set CPUID in capbilities
+  para->cpuid.nent = caps->nr_cpuid_configs+2;
   for (int i = 0; i < caps->nr_cpuid_configs; i++)
   {
     para->cpuid.entries[i].function = caps->cpuid_configs[i].leaf;
     para->cpuid.entries[i].index = caps->cpuid_configs[i].sub_leaf;
-    __asm__("mov %%eax, %4\n\t"
-            "mov %%ecx, %5\n\t"
+    __asm__("mov %4, %%eax\n\t"
+            "mov %5, %%ecx\n\t"
             "cpuid \n\t "
             "mov %%eax, %0\n\t"
             "mov %%ebx, %1\n\t"
@@ -295,7 +361,60 @@ void set_para_cpuid(struct kvm_tdx_init_vm *para, struct kvm_tdx_capabilities *c
     para->cpuid.entries[i].ebx &= caps->cpuid_configs[i].ebx;
     para->cpuid.entries[i].ecx &= caps->cpuid_configs[i].ecx;
     para->cpuid.entries[i].edx &= caps->cpuid_configs[i].edx;
+
+    //disable MWAIT/MONIOR which will cause -EINVAL
+    if(para->cpuid.entries[i].function==0x1){
+      __u64 mask = BIT(3);
+      para->cpuid.entries[i].ecx &= ~mask;
+    }
   }
+  
+  para->cpuid.entries[caps->nr_cpuid_configs].function = 0xd;
+  para->cpuid.entries[caps->nr_cpuid_configs+1].function = 0xd;
+  para->cpuid.entries[caps->nr_cpuid_configs].index = 0x0;
+  para->cpuid.entries[caps->nr_cpuid_configs+1].index = 0x1;
+  //Set other CPUID needed for implicit XFAM setting
+  for(int i = caps->nr_cpuid_configs; i < caps->nr_cpuid_configs+2;i++){
+    __asm__("mov %4, %%eax\n\t"
+            "mov %5, %%ecx\n\t"
+            "cpuid \n\t "
+            "mov %%eax, %0\n\t"
+            "mov %%ebx, %1\n\t"
+            "mov %%ecx, %2\n\t"
+            "mov %%edx, %3\n\t"
+            : "=m"(para->cpuid.entries[i].eax), "=m"(para->cpuid.entries[i].ebx),
+              "=m"(para->cpuid.entries[i].ecx), "=m"(para->cpuid.entries[i].edx)
+            : "m"(para->cpuid.entries[i].function), "m"(para->cpuid.entries[i].index)
+            : "%eax", "%ebx", "%ecx", "%edx");
+  }
+  __u32 xfam_fixed0_low = caps->xfam_fixed0 &0xFFFFFFFF;
+  __u32 xfam_fixed0_high = caps->xfam_fixed0 >> 32;
+  __u32 xfam_fixed1_low = caps->xfam_fixed1 &0xFFFFFFFF;
+  __u32 xfam_fixed1_high = caps->xfam_fixed1 >> 32;
+  //set xfam restrictions
+  para->cpuid.entries[caps->nr_cpuid_configs].eax&=xfam_fixed0_low;
+  para->cpuid.entries[caps->nr_cpuid_configs].eax|=xfam_fixed1_low;
+  para->cpuid.entries[caps->nr_cpuid_configs].edx&=xfam_fixed0_high;
+  para->cpuid.entries[caps->nr_cpuid_configs].edx|=xfam_fixed1_high;
+  para->cpuid.entries[caps->nr_cpuid_configs+1].ecx&=xfam_fixed0_low;
+  para->cpuid.entries[caps->nr_cpuid_configs+1].ecx|=xfam_fixed1_low;
+  para->cpuid.entries[caps->nr_cpuid_configs+1].edx&=xfam_fixed0_high;
+  para->cpuid.entries[caps->nr_cpuid_configs+1].edx|=xfam_fixed1_high;
+
+  para->cpuid.entries[caps->nr_cpuid_configs+1].ecx&=XSAVE_XSS_MASK;
+
+  //close XSS_LBRS not support yet
+  para->cpuid.entries[caps->nr_cpuid_configs+1].ecx&=~XSS_LBRS_MASK;
+  //Set bit S_CET Bit, which should be same as the U_CET BIT
+  if(para->cpuid.entries[caps->nr_cpuid_configs+1].ecx&U_CET_MASK){
+    para->cpuid.entries[caps->nr_cpuid_configs+1].ecx|=S_CET_MASK;
+  }
+  for(int i=0;i<para->cpuid.nent;i++){
+    if(para->cpuid.entries[i].index!=0xFFFFFFFF){
+      para->cpuid.entries[i].flags=KVM_CPUID_FLAG_SIGNIFCANT_INDEX;
+    }
+  }
+
   return;
 }
 
@@ -349,16 +468,144 @@ void tdx_handle_exit(struct kvm_tdx_vmcall *vmcall, VM *vm)
 }
 
 
+void * ram_mmap(int fd,
+                    size_t size,
+                    size_t align,
+                    uint32_t qemu_map_flags,
+                    off_t map_offset){
+  size_t total = size+align;
+  void *ram_try_ptr = mmap(0, total, PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+  if(ram_try_ptr<0){
+    pexit("ram_try_ptr mmap failed");
+  }
+  size_t offset = ALIGN_UP((uintptr_t)ram_try_ptr, align) - (uintptr_t)ram_try_ptr;
+  const bool noreserve = qemu_map_flags & QEMU_MAP_NORESERVE;
+  const bool readonly = qemu_map_flags & QEMU_MAP_READONLY;
+  const bool shared = qemu_map_flags & QEMU_MAP_SHARED;
+  const bool sync = qemu_map_flags & QEMU_MAP_SYNC;
+  const int prot = PROT_READ | (readonly ? 0 : PROT_WRITE);
+  int map_sync_flags = 0;
+  int flags = MAP_FIXED;
+  flags |= fd == -1 ? MAP_ANONYMOUS : 0;
+  flags |= shared ? MAP_SHARED : MAP_PRIVATE;
+  flags |= noreserve ? MAP_NORESERVE : 0;
+  if (shared && sync) {
+        map_sync_flags = MAP_SYNC | MAP_SHARED_VALIDATE;
+    }
+  void *ram_ptr = mmap(ram_try_ptr+offset,size, prot, flags|map_sync_flags,fd, map_offset);
+  if (ram_ptr == NULL)
+    pexit("mmap ram_ptr failed");
+  if (offset > 0) {
+        munmap(ram_try_ptr, offset);
+    }
+  total -= offset;
+    if (total > size + align) {
+        munmap(ram_ptr + size + align, total - size - align);
+    }
+    return ram_ptr;
+}
 
 static void tdx_init_ram_entries(void)
 {
-  unsigned nr_e820_entries;
-  nr_e820_entries = 1;
-  tdx_guest->ram_entries = g_new(TdxRamEntry, nr_e820_entries);
-  tdx_guest->ram_entries[0].address = 0xc800000;//200MB for ROM
-  tdx_guest->ram_entries[0].length = 0xe0000000-0xc800000;//200MB-3.5GB
-  tdx_guest->ram_entries[0].type = TDX_RAM_UNACCEPTED;
-};
+    unsigned i, j, nr_e820_entries;
+
+    nr_e820_entries = e820_get_num_entries();
+    tdx_guest->ram_entries = g_new(TdxRamEntry, nr_e820_entries);
+
+    for (i = 0, j = 0; i < nr_e820_entries; i++) {
+        uint64_t addr, len;
+
+        if (e820_get_entry(i, E820_RAM, &addr, &len)) {
+            tdx_guest->ram_entries[j].address = addr;
+            tdx_guest->ram_entries[j].length = len;
+            tdx_guest->ram_entries[j].type = TDX_RAM_UNACCEPTED;
+            j++;
+        }
+    }
+    tdx_guest->nr_ram_entries = j;
+}
+
+static TdxRamEntry *tdx_find_ram_range(uint64_t address, uint64_t length)
+{
+    TdxRamEntry *e;
+    int i;
+
+    for (i = 0; i < tdx_guest->nr_ram_entries; i++) {
+        e = &tdx_guest->ram_entries[i];
+
+        if (address + length <= e->address ||
+            e->address + e->length <= address) {
+                continue;
+        }
+
+        /*
+         * The to-be-accepted ram range must be fully contained by one
+         * RAM entry.
+         */
+        if (e->address > address ||
+            e->address + e->length < address + length) {
+            return NULL;
+        }
+
+        if (e->type == TDX_RAM_ADDED) {
+            return NULL;
+        }
+
+        break;
+    }
+
+    if (i == tdx_guest->nr_ram_entries) {
+        return NULL;
+    }
+
+    return e;
+}
+
+static void tdx_add_ram_entry(uint64_t address, uint64_t length, uint32_t type)
+{
+    uint32_t nr_entries = tdx_guest->nr_ram_entries;
+    tdx_guest->ram_entries = g_renew(TdxRamEntry, tdx_guest->ram_entries,
+                                     nr_entries + 1);
+
+    tdx_guest->ram_entries[nr_entries].address = address;
+    tdx_guest->ram_entries[nr_entries].length = length;
+    tdx_guest->ram_entries[nr_entries].type = type;
+    tdx_guest->nr_ram_entries++;
+}
+
+static int tdx_accept_ram_range(uint64_t address, uint64_t length)
+{
+    uint64_t head_start, tail_start, head_length, tail_length;
+    uint64_t tmp_address, tmp_length;
+    TdxRamEntry *e;
+
+    e = tdx_find_ram_range(address, length);
+    if (!e) {
+        return -EINVAL;
+    }
+
+    tmp_address = e->address;
+    tmp_length = e->length;
+
+    e->address = address;
+    e->length = length;
+    e->type = TDX_RAM_ADDED;
+
+    head_length = address - tmp_address;
+    if (head_length > 0) {
+        head_start = tmp_address;
+        tdx_add_ram_entry(head_start, head_length, TDX_RAM_UNACCEPTED);
+    }
+
+    tail_start = address + length;
+    if (tail_start < tmp_address + tmp_length) {
+        tail_length = tmp_address + tmp_length - tail_start;
+        tdx_add_ram_entry(tail_start, tail_length, TDX_RAM_UNACCEPTED);
+    }
+
+    return 0;
+}
+
 
 static int tdx_ram_entry_compare(const void *lhs_, const void* rhs_)
 {
@@ -406,16 +653,52 @@ int kvm_encrypt_reg_region(int vmfd, hwaddr start, hwaddr size, bool reg_region)
     return r;
 }
 
-VM *kvm_init(uint8_t code[], size_t len,uint8_t code_kernel[],size_t len_kernel)
+void dump_caps(){
+  printf("attrs fixed 0: %llu\n",tdx_caps->attrs_fixed0);
+  printf("attrs fixed 1: %llu\n",tdx_caps->attrs_fixed1);
+  printf("xfam fixed 0: %llu\n",tdx_caps->xfam_fixed0);
+  printf("xfam fixed 1: %llu\n",tdx_caps->xfam_fixed1);
+  printf("nr_cpuid_configs: %u\n",tdx_caps->nr_cpuid_configs);
+  for(int i=0;i<tdx_caps->nr_cpuid_configs;i++){
+    printf("page %d, cpuid:leaf %u subleaf %u eax %u ebx %u ecx %u edx %u \n",i,tdx_caps->cpuid_configs[i].leaf,
+    tdx_caps->cpuid_configs[i].sub_leaf,tdx_caps->cpuid_configs[i].eax,tdx_caps->cpuid_configs[i].ebx,tdx_caps->cpuid_configs[i].ecx
+    ,tdx_caps->cpuid_configs[i].edx);
+  }
+}
+
+void dump_vm_paras(struct kvm_tdx_init_vm *vm_paras){
+  printf("attributes: %llu\n",vm_paras->attributes);
+  printf("mrconfigid: ");
+  for(int i = 0; i < 6; i++){
+    printf("%llu ",vm_paras->mrconfigid[i]);
+  }
+  printf("\n");
+  printf("mrowner: ");
+  for(int i = 0; i < 6; i++){
+    printf("%llu ",vm_paras->mrowner[i]);
+  }
+  printf("\n");
+  printf("mrownerconfig: ");
+  for(int i = 0; i < 6; i++){
+    printf("%llu ",vm_paras->mrownerconfig[i]);
+  }
+  printf("\n");
+  for(int i=0;i<vm_paras->cpuid.nent;i++){
+    printf("page %d, cpuid:leaf %u subleaf %u eax %u ebx %u ecx %u edx %u flag %d \n",i,vm_paras->cpuid.entries[i].function,
+    vm_paras->cpuid.entries[i].index,vm_paras->cpuid.entries[i].eax,vm_paras->cpuid.entries[i].ebx,vm_paras->cpuid.entries[i].ecx
+    ,vm_paras->cpuid.entries[i].edx,vm_paras->cpuid.entries[i].flags);
+  }
+}
+VM *kvm_init(const char * bios_name)
 {
 
-  struct kvm_tdx_capabilities *caps;
   int kvmfd = open("/dev/kvm", O_RDWR | O_CLOEXEC);
   if (kvmfd < 0)
     pexit("open(/dev/kvm)");
 
   // Check which vm type in KVM is supported, now first bit is legacy vm, second bit is protected vm
   int tdx_is_supported = ioctl(kvmfd, KVM_CHECK_EXTENSION, KVM_CAP_VM_TYPES);
+  printf("VM Type supported bitmap: %d \n",tdx_is_supported);
   if (!(tdx_is_supported & BIT(KVM_X86_PROTECTED_VM)))
     pexit("Protected VM is not supported in kvm");
 
@@ -428,30 +711,86 @@ VM *kvm_init(uint8_t code[], size_t len,uint8_t code_kernel[],size_t len_kernel)
     error("Got KVM api version %d, expected %d\n",
           api_ver, KVM_API_VERSION);
   }
+  printf("KVM version: %d\n", KVM_API_VERSION);
 
+  
+  if (get_tdx_capabilities(kvmfd) < 0)
+    pexit("Get TDX capabilities failed");
+  dump_caps();
   // Create VM
-  int vmfd = ioctl(kvmfd, KVM_CREATE_VM, 0);
+  int vmfd = ioctl(kvmfd, KVM_CREATE_VM, 1);
   if (vmfd < 0)
     pexit("ioctl(KVM_CREATE_VM)");
   // Query if TDX is supported on the platform
-  if (get_tdx_capabilities(vmfd, caps) < 0)
-    pexit("Get TDX capabilities failed");
   // Set kvm max vcpu
-  if (set_kvm_max_vcpu(vmfd, KVM_CAP_MAX_VCPUS) < 0)
+  if (set_kvm_max_vcpu(vmfd, 1) < 0)
     pexit("Set max vcpus failed");
+  int max_vcpu = ioctl(vmfd, KVM_CHECK_EXTENSION, KVM_CAP_MAX_VCPUS);
+  if (max_vcpu<0){
+    pexit("Check max vcpus failed");
+  }
+  printf("Max vcpus: %d \n",max_vcpu);
+
+  //Set dirty log protect
+  __u64 dirty_log_manual_caps = ioctl(kvmfd, KVM_CHECK_EXTENSION, KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2);
+  dirty_log_manual_caps &= (KVM_DIRTY_LOG_MANUAL_PROTECT_ENABLE | KVM_DIRTY_LOG_INITIALLY_SET);
+  if(kvm_vm_enable_cap(vmfd, KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2, dirty_log_manual_caps)<0)
+    pexit("Enable dirty log manual failed");
+
+  //enable KVM_CAP_EXCEPTION_PAYLOAD
+  if(kvm_vm_enable_cap(vmfd, KVM_CAP_EXCEPTION_PAYLOAD, true)<0)
+    pexit("Enable KVM_CAP_EXCEPTION_PAYLOAD failed");
+  
+  if(kvm_vm_enable_cap(vmfd, KVM_CAP_X86_TRIPLE_FAULT_EVENT, true)<0)
+    pexit("Enable KVM_CAP_X86_TRIPLE_FAULT_EVENT failed");
+  
+  //Set KVM_SET_IDENTITY_MAP_ADDR and KVM_SET_TSS_ADDR, needed for vm86
+  /*__u64 identity_base = 0xfeffc000;
+  if(ioctl(vmfd,KVM_SET_IDENTITY_MAP_ADDR,&identity_base)<0)
+    pexit("Set KVM_SET_IDENTITY_MAP_ADDR failed");
+  if(ioctl(vmfd,KVM_SET_TSS_ADDR,identity_base + 0x1000)<0)
+    pexit("Set KVM_SET_TSS_ADDR failed");
+
+  //Add e820 entry for identity base;
+  if(e820_add_entry(identity_base, 0x4000, E820_RESERVED)<0)
+    pexit("Add e820 entry identity_base failed");
+
+  uint64_t notify_window_flags =
+                KVM_X86_NOTIFY_VMEXIT_ENABLED |
+                KVM_X86_NOTIFY_VMEXIT_USER;
+  if(kvm_vm_enable_cap(vmfd, KVM_CAP_X86_NOTIFY_VMEXIT, notify_window_flags)<0)
+    pexit("Enable KVM_CAP_X86_NOTIFY_VMEXIT failed");
+
+  //Enable userspace MSR
+  if(kvm_vm_enable_cap(vmfd,KVM_CAP_X86_USER_SPACE_MSR,KVM_MSR_EXIT_REASON_FILTER)<0)
+    pexit("Enable KVM_CAP_X86_USER_SPACE_MSR failed");*/
+  
+  //msr handler filter too complex, todo
+
+  //Enable irq split
+  if (kvm_vm_enable_cap(vmfd,KVM_CAP_SPLIT_IRQCHIP,24) < 0){
+    pexit("Enable irq split failed");
+  };
+  //Initiate irq routing, todo
+
   // Set TSC frequency, optional
   int frequency = 1000000; //1 GHZ
   if (ioctl(vmfd, KVM_SET_TSC_KHZ, frequency) < 0)
     pexit("Set TSC freqeuncy failed");
   // Initialize TDX VM,attributes,mrconfigid,mrowner,mrownerconfig,cpuid should be initialized here.
   // For cpuid, should use caps to mask the unconfigurable cpuid to keep local cpuid settings same with TDX Module inside.
-  int size = sizeof(struct kvm_tdx_init_vm) +
-             caps->nr_cpuid_configs * sizeof(struct kvm_cpuid2);
-  struct kvm_tdx_init_vm *vm_paras = (struct kvm_tdx_init_vm *)malloc(size);
-  memset(vm_paras, 0x0, size);
-  set_para_cpuid(vm_paras, caps);
-  if (initialize_tdx_vm(vmfd, vm_paras) < 0)
+  struct kvm_tdx_init_vm *vm_paras = (struct kvm_tdx_init_vm *)malloc(sizeof(struct kvm_tdx_init_vm));
+  memset(vm_paras, 0x0, sizeof(struct kvm_tdx_init_vm));
+  set_para_cpuid(vm_paras, tdx_caps);
+
+  dump_vm_paras(vm_paras);
+  
+  if (initialize_tdx_vm(vmfd, vm_paras) < 0){
     pexit("Initialize TDX VM failed");
+  }  
+  free(vm_paras);
+  
+
 
   // Create vcpu
   // Assume there is only one vcpu
@@ -462,23 +801,71 @@ VM *kvm_init(uint8_t code[], size_t len,uint8_t code_kernel[],size_t len_kernel)
   // TDVF should be copy to the memory,allocate memory for TDVF
   // BVF,CVF
   tdx_guest = g_new(TdxGuest,1);
-  void *mem = mmap(NULL,
-                   MEM_SIZE,
-                   PROT_READ | PROT_WRITE,
-                   MAP_SHARED | MAP_ANONYMOUS,
-                   -1, 0);
-  if (mem == NULL)
-    pexit("mmap(MEM_SIZE)");
-  memcpy((void *)mem, code, len);
-  void *mem_kernel = mem+len;
-  memcpy((void *)mem_kernel, code_kernel, len_kernel);
+  int ram_fd = memfd_create("backend_ram", MFD_CLOEXEC);
+  if(ram_fd<0){
+    pexit("ram_fd created failed");
+  }
+  int ram_fd_priv = syscall(__NR_memfd_restricted,0);
+  if(ram_fd_priv<0){
+    pexit("ram_fd_priv created failed");
+  }
+  if (ftruncate(ram_fd_priv, MEM_SIZE) == -1){
+    pexit("ram_fd_priv truncate failed");
+  }
+  //allocate ram from fd
+  void *ram_ptr = ram_mmap(ram_fd,MEM_SIZE,0X1000,QEMU_MAP_NORESERVE,0);
+
+   struct kvm_userspace_memory_region_ext mem_region_ram = {
+    .region.slot = 0,
+    .region.flags = KVM_MEM_PRIVATE,
+    .region.guest_phys_addr = 0,
+    .region.memory_size = MEM_SIZE,
+    .region.userspace_addr = (size_t)ram_ptr,
+    .restricted_fd=ram_fd_priv,
+    .restricted_offset=0
+    };
+  if (ioctl(vmfd, KVM_SET_USER_MEMORY_REGION, &mem_region_ram) < 0)
+  {
+    pexit("ioctl(KVM_SET_USER_MEMORY_REGION) ram failed");
+  }
+
+  e820_add_entry(0, MEM_SIZE, E820_RAM);
+  int bios_size = get_image_size(bios_name);
+  printf("BIOS size: %d\n",bios_size);
+  int bios_fd_priv = syscall(__NR_memfd_restricted,0);
+  if(bios_fd_priv<0){
+    pexit("bios_fd_priv created failed");
+  }
+  if (ftruncate(bios_fd_priv, bios_size) == -1){
+    pexit("bios_fd_priv truncate failed");
+  }
+  void *bios_ptr = ram_mmap(-1,bios_size,1,0,0);
+  if (bios_ptr == NULL)
+    pexit("mmap bios_ptr failed");
+
+  struct kvm_userspace_memory_region_ext mem_region_bios = {
+    .region.slot = 1,
+    .region.flags = KVM_MEM_PRIVATE,
+    .region.guest_phys_addr = 0xff000000,
+    .region.memory_size = bios_size,
+    .region.userspace_addr = (size_t)bios_ptr,
+    .restricted_fd=ram_fd_priv,
+    .restricted_offset=0
+    };
+  if (ioctl(vmfd, KVM_SET_USER_MEMORY_REGION, &mem_region_bios) < 0)
+  {
+    pexit("ioctl(KVM_SET_USER_MEMORY_REGION) ram failed");
+  }
+
+  load_image_size(bios_name,bios_ptr,bios_size);
   //parse tdvf and create td hob
-  TdxFirmware *tdvf = g_new(TdxFirmware, 1);
-  tdx_guest->tdvf = *tdvf;
+  tdx_guest->tdvf = *g_new(TdxFirmware, 1);
+  TdxFirmware *tdvf = &tdx_guest->tdvf;
   TdxFirmwareEntry *entry;    
   tdx_init_ram_entries();
-  pc_system_parse_ovmf_flash(mem, len);
-  tdvf_parse_metadata(tdvf, mem, len);
+  pc_system_parse_ovmf_flash(bios_ptr, bios_size);
+  tdvf_parse_metadata(tdvf, bios_ptr, bios_size);
+  //void *kernel_mem;
   for_each_tdx_fw_entry(tdvf, entry)
   {
     switch (entry->type)
@@ -489,11 +876,20 @@ VM *kvm_init(uint8_t code[], size_t len,uint8_t code_kernel[],size_t len_kernel)
       break;
     case TDVF_SECTION_TYPE_TD_HOB:
     case TDVF_SECTION_TYPE_TEMP_MEM:
-    case TDVF_SECTION_TYPE_PERM_MEM:
+      entry->mem_ptr = ram_mmap(-1, entry->size,0X1000, 0, 0);
+      tdx_accept_ram_range(entry->address, entry->size);
+      break;
     case TDVF_SECTION_TYPE_PAYLOAD:
+      break;
+    case TDVF_SECTION_TYPE_PERM_MEM:
+
+      break;
     case TDVF_SECTION_TYPE_PAYLOAD_PARAM:
-      entry->mem_ptr = malloc(entry->size);
-      //tdx_accept_ram_range(entry->address, entry->size);
+      if (!tdx_find_ram_range(entry->address, entry->size)) {
+                error_report("Failed to reserve ram for TDVF section %d",
+                             entry->type);
+                exit(1);
+      }
       break;
     default:
       error_report("Unsupported TDVF section %d", entry->type);
@@ -503,7 +899,7 @@ VM *kvm_init(uint8_t code[], size_t len,uint8_t code_kernel[],size_t len_kernel)
 
   qsort(tdx_guest->ram_entries, tdx_guest->nr_ram_entries,
           sizeof(TdxRamEntry), &tdx_ram_entry_compare);
-  tdvf_hob_create(tdx_guest, tdx_get_hob_entry(tdx_guest), mem_kernel);
+  tdvf_hob_create(tdx_guest, tdx_get_hob_entry(tdx_guest));
 
   // Pass TDX specific VCPU parameters, the TD HOB address, TD HOB should be created below TDVF
   TdxFirmwareEntry *hob;
@@ -511,32 +907,20 @@ VM *kvm_init(uint8_t code[], size_t len,uint8_t code_kernel[],size_t len_kernel)
   if (tdx_vcpu_init(vcpufd, hob->address) < 0)
     pexit("TDX vcpu initialized failed");
   // Enable CPUID[0x1].ECX.X2APIC(bit 21)=1 so that the following setting of MSR_IA32_APIC_BASE success.
-  if (enalbe_x2apic(vcpufd,kvmfd) < 0)
+  if (enable_x2apic(vcpufd,kvmfd) < 0)
     pexit("Enable x2apic in set kvm cpuid failed");
   // Set the initial reset value of MSR_IA32_APIC
   struct kvm_msrs *msrs = (struct kvm_msrs *)malloc(sizeof(struct kvm_msrs) + sizeof(struct kvm_msr_entry));
   msrs->nmsrs = 1;
   msrs->pad = 0;
-  msrs->entries->index = MSR_IA32_APICBASE;                                            // MSR_IA32_APICBASE is in header msr-index.h, not in usr/include,hould add a own difiniction header or define directly
-  msrs->entries->data = APIC_DEFAULT_ADDRESS | BIT(XAPIC_ENABLE) | BIT(X2APIC_ENABLE); // MSR_IA32_APICBASE_BSP can be add optionally
-  msrs->entries->reserved = 0;
+  msrs->entries[0].index = MSR_IA32_APICBASE;                                            // MSR_IA32_APICBASE is in header msr-index.h, not in usr/include,hould add a own difiniction header or define directly
+  msrs->entries[0].data = APIC_DEFAULT_ADDRESS | BIT(XAPIC_ENABLE) | BIT(X2APIC_ENABLE); // MSR_IA32_APICBASE_BSP can be add optionally
+  msrs->entries[0].reserved = 0;
   if (ioctl(vcpufd, KVM_SET_MSRS, msrs) < 0)
     pexit("Set apic base failed");
   free(msrs);
 
-  
   // Initializing guest memory
-  //allocate memory
-  struct kvm_userspace_memory_region region = {
-    .slot = 0,
-    .flags = 0,
-    .guest_phys_addr = 0,
-    .memory_size = MEM_SIZE,
-    .userspace_addr = (size_t)mem};
-  if (ioctl(vmfd, KVM_SET_USER_MEMORY_REGION, &region) < 0)
-  {
-    pexit("ioctl(KVM_SET_USER_MEMORY_REGION)");
-  }
   //encrypt memory
   for_each_tdx_fw_entry(tdvf, entry) {
       struct kvm_tdx_init_mem_region mem_region = {
@@ -550,18 +934,16 @@ VM *kvm_init(uint8_t code[], size_t len,uint8_t code_kernel[],size_t len_kernel)
             error_report("Reserve initial private memory failed %s", strerror(-r));
             exit(1);
       }
-
+      if (entry->type == TDVF_SECTION_TYPE_PERM_MEM) {
+            continue;
+        }
       __u32 flags = entry->attributes & TDVF_SECTION_ATTRIBUTES_MR_EXTEND ?
                     KVM_TDX_MEASURE_MEMORY_REGION : 0;
 
-      if (encrypt_tdx_memory(vcpufd, &mem_region, len, flags) < 0)
+      if (encrypt_tdx_memory(vmfd, &mem_region, flags) < 0)
       pexit("TDX memory initialization failed");
 
-      if (entry->type == TDVF_SECTION_TYPE_TD_HOB ||
-          entry->type == TDVF_SECTION_TYPE_TEMP_MEM) {
-          free(entry->mem_ptr);
-          entry->mem_ptr = NULL;
-      }
+
   }
 
 
@@ -578,7 +960,7 @@ VM *kvm_init(uint8_t code[], size_t len,uint8_t code_kernel[],size_t len_kernel)
 
   VM *vm = (VM *)malloc(sizeof(VM));
   *vm = (struct VM){
-      .mem = mem,
+      .mem = ram_ptr,
       .mem_size = MEM_SIZE,
       .vcpufd = vcpufd,
       .run = run};
@@ -672,22 +1054,18 @@ void copy_argv(VM *vm, int argc, char *argv[])
 int main(int argc, char *argv[])
 {
 
-  if (argc < 3)
+  if (argc < 2)
   {
-    printf("Usage: %s kernel.bin user.elf [user_args...]\n", argv[0]);
+    printf("Usage: %s bios.bin \n", argv[0]);
     exit(EXIT_FAILURE);
   }
-  uint8_t *code,*code_kernel;
-  size_t len,len_kernel;
   // Load TDVF here
-  read_file(argv[1], &code, &len);
-  read_file(argv[2], &code_kernel, &len_kernel);
 
   /*if(len > MAX_KERNEL_SIZE)
     error("Kernel size exceeded, %p > MAX_KERNEL_SIZE(%p).\n",
       (void*) len,
       (void*) MAX_KERNEL_SIZE);*/
-  VM *vm = kvm_init(code, len, code_kernel,len_kernel);
+  VM *vm = kvm_init(argv[1]);
   //copy_argv(vm, argc - 2, &argv[2]);
   execute(vm);
 }
