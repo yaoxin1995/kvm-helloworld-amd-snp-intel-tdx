@@ -805,7 +805,7 @@ int register_coalesced_mmio(int vmfd,__u64 addr, __u32 size, __u32 pio){
 
 
 
-VM *kvm_init(const char * bios_name, const char* kernel_name )
+VM *kvm_init(const char * bios_name )
 {
 
   int kvmfd = open("/dev/kvm", O_RDWR | O_CLOEXEC);
@@ -1276,9 +1276,9 @@ void copy_argv(VM *vm, int argc, char *argv[])
 int main(int argc, char *argv[])
 {
 
-  if (argc < 3)
+  if (argc < 2)
   {
-    printf("Usage: %s kernel.bin user.elf [user_args...]\n", argv[0]);
+    printf("Usage: %s bios.bin\n", argv[0]);
     exit(EXIT_FAILURE);
   }
   // Load TDVF here
@@ -1287,7 +1287,7 @@ int main(int argc, char *argv[])
     error("Kernel size exceeded, %p > MAX_KERNEL_SIZE(%p).\n",
       (void*) len,
       (void*) MAX_KERNEL_SIZE);*/
-  VM *vm = kvm_init(argv[1],argv[2]);
+  VM *vm = kvm_init(argv[1]);
   //copy_argv(vm, argc - 2, &argv[2]);
   execute(vm);
 }
