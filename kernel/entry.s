@@ -4,6 +4,7 @@
 .extern pml4
 .intel_syntax noprefix
 _start:
+
 #  mov rdx, [rsp] /* argc */
 #  lea rcx, [rsp + 8] /* argv */
 #  assumes we already have a working stack
@@ -13,17 +14,18 @@ _start:
   pushq rdi; #arg0
   pushq rsi; #arg1
 #  stack should be 16 byte aligned
-
-   callq [rip + init_kernel_page_tables];
+   lea rax, [rip + init_kernel_page_tables]
+   callq rax;
    
 # enable page tables
    mov rax, QWORD PTR [rip+pml4]
    mov cr3, rax
 # enable cache
 # all is good. now go to the kernel start
-
-  callq [rip + kernel_main_tdx];
+  lea rax, [rip + kernel_main_tdx]
+  callq rax;
 
 hlt:
   hlt
   jmp [rip + hlt];
+
