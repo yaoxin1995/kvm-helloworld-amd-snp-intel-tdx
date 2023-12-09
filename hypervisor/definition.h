@@ -3,12 +3,21 @@
 
 #include <stdint.h>
 
+
+
+typedef struct memory_region{
+  struct kvm_userspace_memory_region_ext *kvm_mr;
+  int fd;
+} memory_region;
+
 typedef struct VM {
   void *mem;
   uint64_t mem_size;
   /* Only supports one vCPU */
   int vcpufd;
+  int vmfd;
   struct kvm_run *run;
+  memory_region regions[];
 } VM;
 
 /* Common macros */
