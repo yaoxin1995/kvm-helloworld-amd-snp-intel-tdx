@@ -23,7 +23,6 @@
 #define X2APIC 21
 #define XAPIC_ENABLE 10
 #define X2APIC_ENABLE 11
-#define MSR_IA32_APICBASE_BSP 8
 #define MSR_IA32_UCODE_REV              0x8b
 #define APIC_DEFAULT_ADDRESS 0xfee00000
 #define PS_LIMIT (0x200000)
@@ -47,7 +46,6 @@
 #define PAGE_TABLE_SIZE (0x5000)
 #define MAX_KERNEL_SIZE (PS_LIMIT - PAGE_TABLE_SIZE - KERNEL_STACK_SIZE)
 #define MEM_SIZE 0x80000000 
-#define BIT(nr) (0x1UL << (nr))
 
 #define __X32_SYSCALL_BIT	0x40000000
 #define __NR_memfd_restricted 451
@@ -61,7 +59,8 @@
 #define QEMU_MAP_NORESERVE  (1 << 3)
 
 static TdxGuest *tdx_guest;
-static struct kvm_tdx_capabilities *tdx_caps;
+
+
 void read_file(const char *filename, uint8_t **content_ptr, size_t *size_ptr)
 {
   FILE *f = fopen(filename, "rb");
@@ -436,6 +435,50 @@ err:
     return ret;
 }
 
+static int kvm_get_supported_feature_msrs(int kvmfd)
+{
+    int ret = 0;
+
+    if (kvm_feature_msrs != NULL) {
+        return 0;
+    }
+    if (!(ioctl(kvmfd,KVM_CHECK_EXTENSION,KVM_CAP_GET_MSR_FEATURES))) {
+        return 0;
+    }
+
+    struct kvm_msr_list msr_list;
+
+    msr_list.nmsrs = 0;
+    
+    ret = ioctl(kvmfd,KVM_GET_MSR_FEATURE_INDEX_LIST,&msr_list);
+    if (ret < 0 ) {
+        ret = -errno;
+        if(ret != -E2BIG){
+          error_report("Fetch KVM feature MSR list failed: %s",
+            strerror(-ret));
+          return ret;
+        }
+        
+    }
+
+    assert(msr_list.nmsrs > 0);
+    kvm_feature_msrs = malloc(sizeof(msr_list) +
+                 msr_list.nmsrs * sizeof(msr_list.indices[0]));
+    memset(kvm_feature_msrs,0x0,sizeof(msr_list) +
+                 msr_list.nmsrs * sizeof(msr_list.indices[0]));
+    kvm_feature_msrs->nmsrs = msr_list.nmsrs;
+    ret = ioctl(kvmfd,KVM_GET_MSR_FEATURE_INDEX_LIST,kvm_feature_msrs);
+    if (ret < 0) {
+        error_report("Fetch KVM feature MSR list failed: %s",
+            strerror(-ret));
+        free(kvm_feature_msrs);
+        kvm_feature_msrs = NULL;
+        return ret;
+    }
+
+    return 0;
+}
+
 static int kvm_set_ioeventfd_pio(int vmfd,int fd, uint16_t addr, uint16_t val,
                                  bool assign, uint32_t size, bool datamatch)
 {
@@ -523,7 +566,9 @@ static int tdx_handle_map_gpa(struct kvm_tdx_vmcall *vmcall,VM *vm)
     }
 
     if (size > 0) {
-      
+      if(!private){
+        printf("VMM accpeted converting memory from private to shared, gpa:%lx, size%lx.\n",gpa,size);
+      }
       ret = kvm_convert_memory(vm, gpa, size, private);
     }
 
@@ -886,7 +931,7 @@ int handle_io_write(void * data,int size,uint32_t count){
 VM *kvm_init(const char * bios_name )
 {
 
-  int kvmfd = open("/dev/kvm", O_RDWR | O_CLOEXEC);
+  kvmfd = open("/dev/kvm", O_RDWR | O_CLOEXEC);
   if (kvmfd < 0)
     pexit("open(/dev/kvm)");
 
@@ -910,6 +955,7 @@ VM *kvm_init(const char * bios_name )
   
   if (get_tdx_capabilities(kvmfd) < 0)
     pexit("Get TDX capabilities failed");
+  update_tdx_cpuid_lookup_by_tdx_caps();
   dump_caps();
   // Create VM
   int vmfd = ioctl(kvmfd, KVM_CREATE_VM, 1);
@@ -926,7 +972,7 @@ VM *kvm_init(const char * bios_name )
   printf("Max vcpus: %d \n",max_vcpu);
 
   //Set dirty log protect
-  __u64 dirty_log_manual_caps = ioctl(kvmfd, KVM_CHECK_EXTENSION, KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2);
+ /* __u64 dirty_log_manual_caps = ioctl(kvmfd, KVM_CHECK_EXTENSION, KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2);
   dirty_log_manual_caps &= (KVM_DIRTY_LOG_MANUAL_PROTECT_ENABLE | KVM_DIRTY_LOG_INITIALLY_SET);
   if(kvm_vm_enable_cap(vmfd, KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2, dirty_log_manual_caps)<0)
     pexit("Enable dirty log manual failed");
@@ -946,10 +992,10 @@ VM *kvm_init(const char * bios_name )
 
   //Enable userspace MSR
   if(kvm_vm_enable_cap(vmfd,KVM_CAP_X86_USER_SPACE_MSR,KVM_MSR_EXIT_REASON_FILTER)<0)
-    pexit("Enable KVM_CAP_X86_USER_SPACE_MSR failed");
+    pexit("Enable KVM_CAP_X86_USER_SPACE_MSR failed");*/
   
   //msr handler filter 
-  struct kvm_msr_filter *filter = malloc(sizeof(struct kvm_msr_filter));
+  /*struct kvm_msr_filter *filter = malloc(sizeof(struct kvm_msr_filter));
   memset(filter, 0x0, sizeof(struct kvm_msr_filter));
   uint64_t zero = 0;
   filter->ranges[0].flags = KVM_MSR_FILTER_READ;
@@ -958,7 +1004,7 @@ VM *kvm_init(const char * bios_name )
   filter->ranges[0].bitmap = (__u8 *)&zero;
   if(ioctl(vmfd, KVM_X86_SET_MSR_FILTER, filter)<0)
     pexit("KVM_X86_SET_MSR_FILTER failed");
-  free(filter);
+  free(filter);*/
   //Enable irq split
   if (kvm_vm_enable_cap(vmfd,KVM_CAP_SPLIT_IRQCHIP,24) < 0){
     pexit("Enable irq split failed");
@@ -975,6 +1021,7 @@ VM *kvm_init(const char * bios_name )
     pexit("KVM_SET_GSI_ROUTING failed");
   }
   free(irq_routing);
+  kvm_get_supported_feature_msrs(kvmfd);
   //assign and design ioeventfds
 /*
   int ioeventfds[7];
@@ -998,7 +1045,7 @@ VM *kvm_init(const char * bios_name )
     pexit("Set max cpus number failed.");
    };
   // Set TSC frequency, optional
-  int frequency = 1000000; //1 GHZ
+  int frequency = 2000000; //2 GHZ
   if (ioctl(vmfd, KVM_SET_TSC_KHZ, frequency) < 0)
     pexit("Set TSC freqeuncy failed");
   // Initialize TDX VM,attributes,mrconfigid,mrowner,mrownerconfig,cpuid should be initialized here.
@@ -1006,7 +1053,11 @@ VM *kvm_init(const char * bios_name )
   struct kvm_tdx_init_vm *vm_paras = (struct kvm_tdx_init_vm *)malloc(sizeof(struct kvm_tdx_init_vm));
   memset(vm_paras, 0x0, sizeof(struct kvm_tdx_init_vm));
   vm_paras->attributes=0x10000000;
-  set_para_cpuid(vm_paras);
+  CPUX86State *env = (CPUX86State *)malloc(sizeof(CPUX86State));
+  memset(env,0x0,sizeof(CPUX86State));
+  initialize_CPUX86State(env);
+  vm_paras->cpuid.nent = kvm_x86_arch_cpuid(env, vm_paras->entries, 0);
+  //set_para_cpuid(vm_paras);
 
   dump_vm_paras(vm_paras);
   
@@ -1024,13 +1075,13 @@ VM *kvm_init(const char * bios_name )
     pexit("ioctl(KVM_CREATE_VCPU)");
   struct cpuid_data * cpuid_data = malloc(sizeof(struct cpuid_data));
   memset(cpuid_data, 0, sizeof(struct cpuid_data));
-  initialize_cpuid2(cpuid_data,vm_paras);
+  initialize_cpuid2(cpuid_data,vm_paras,env);
   if(ioctl(vcpufd,KVM_SET_CPUID2,cpuid_data)<0){
     pexit("KVM_SET_CPUID2 failed");
   };
   free(vm_paras);
 
-  struct kvm_msrs * msr = malloc(sizeof(struct kvm_msrs)+sizeof(struct kvm_msr_entry));
+  /*struct kvm_msrs * msr = malloc(sizeof(struct kvm_msrs)+sizeof(struct kvm_msr_entry));
   msr->nmsrs=1;
   msr->pad=0;
   msr->entries[0].index = MSR_IA32_UCODE_REV;
@@ -1040,13 +1091,16 @@ VM *kvm_init(const char * bios_name )
   if(ioctl(vcpufd,KVM_SET_MSRS,msr)<0){
     pexit("msr initialization failed");
   }
-  free(msr);
+  free(msr);*/
   // TDVF should be copy to the memory,allocate memory for TDVF
   // BVF,CVF
   tdx_guest = g_new(TdxGuest,1);
   int ram_fd = memfd_create("backend_ram", MFD_CLOEXEC);
   if(ram_fd<0){
     pexit("ram_fd created failed");
+  }
+  if (ftruncate(ram_fd, MEM_SIZE) == -1){
+    pexit("ram_fd truncate failed");
   }
   int ram_fd_priv = syscall(__NR_memfd_restricted,0);
   if(ram_fd_priv<0){
@@ -1065,7 +1119,6 @@ VM *kvm_init(const char * bios_name )
   mem_region_ram->region.userspace_addr = (size_t)ram_ptr;
   mem_region_ram->restricted_fd=ram_fd_priv;
   mem_region_ram->restricted_offset=0;
-
   if (ioctl(vmfd, KVM_SET_USER_MEMORY_REGION, mem_region_ram) < 0)
   {
     pexit("ioctl(KVM_SET_USER_MEMORY_REGION) ram failed");
@@ -1097,16 +1150,16 @@ VM *kvm_init(const char * bios_name )
   {
     pexit("ioctl(KVM_SET_USER_MEMORY_REGION) ram failed");
   }
-  register_coalesced_mmio(vmfd,0xcf8,0x1,0x1);
+  /*register_coalesced_mmio(vmfd,0xcf8,0x1,0x1);
   register_coalesced_mmio(vmfd,0xcfa,0x2,0x1);
-  register_coalesced_mmio(vmfd,0x70,0x1,0x1);
+  register_coalesced_mmio(vmfd,0x70,0x1,0x1);*/
 
-  struct kvm_msrs * msrs = malloc(sizeof(struct kvm_msrs)+31*sizeof(struct kvm_msr_entry));
+  /*struct kvm_msrs * msrs = malloc(sizeof(struct kvm_msrs)+31*sizeof(struct kvm_msr_entry));
   set_msrs(msrs,true);
   if(ioctl(vcpufd,KVM_SET_MSRS,msrs)<0){
     pexit("msrs setting failed");
   }
-  free(msrs);
+  free(msrs);*/
   load_image_size(bios_name,bios_ptr,bios_size);
   //parse tdvf and create td hob
   tdx_guest->tdvf = *g_new(TdxFirmware, 1);
@@ -1165,7 +1218,7 @@ VM *kvm_init(const char * bios_name )
   msr_apic->nmsrs = 1;
   msr_apic->pad = 0;
   msr_apic->entries[0].index = MSR_IA32_APICBASE;                                            // MSR_IA32_APICBASE is in header msr-index.h, not in usr/include,hould add a own difiniction header or define directly
-  msr_apic->entries[0].data = APIC_DEFAULT_ADDRESS | BIT(XAPIC_ENABLE) | BIT(X2APIC_ENABLE)|BIT(MSR_IA32_APICBASE_BSP); // MSR_IA32_APICBASE_BSP can be add optionally
+  msr_apic->entries[0].data = APIC_DEFAULT_ADDRESS | BIT(XAPIC_ENABLE) | BIT(X2APIC_ENABLE)|MSR_IA32_APICBASE_BSP; // MSR_IA32_APICBASE_BSP can be add optionally
   msr_apic->entries[0].reserved = 0;
   if (ioctl(vcpufd, KVM_SET_MSRS, msr_apic) < 0)
     pexit("Set apic base failed");
@@ -1321,18 +1374,37 @@ void execute(VM *vm)
     case KVM_EXIT_IO:
       if (!check_iopl(vm))
         error("KVM_EXIT_SHUTDOWN\n");
-      if (vm->run->io.port == 0x3f8)
+      switch (vm->run->io.port)
       {
+      case 0x3f8:
         if(vm->run->io.direction){
           ret = handle_io_write((uint8_t *)vm->run + vm->run->io.data_offset,
                               vm->run->io.size,
                               vm->run->io.count);
         }
-        if(ret<0)
+        if(ret<0){
           pexit("IO write failed.\n");
-      }
-      else
+        }
+        break;
+      case 0x111:
+        if(vm->run->io.direction){
+          char * write_ptr = (char *)0x7c4de000+vm->regions[0].kvm_mr->region.userspace_addr;
+          printf("VMM received write from TD,gpa:0x7c4de000, va:0x%lx, value:0x%x \n",(uint64_t)write_ptr,(char)*write_ptr);
+          ret = 0;
+        }
+        break;
+      case 0x112:
+        if(vm->run->io.direction){
+          char * read_ptr = (char *)0x7c4de001+vm->regions[0].kvm_mr->region.userspace_addr;
+          *read_ptr = 0xbb;
+          printf("VMM write to TD,gpa:0x7c4de001, va:0x%lx, value:0xbb \n",(uint64_t)read_ptr);
+          ret = 0;
+        }
+        break;
+      default:
         error("Unhandled I/O port: 0x%x\n", vm->run->io.port);
+        break;
+      }
       break;
     case KVM_EXIT_FAIL_ENTRY:
       error("KVM_EXIT_FAIL_ENTRY: hardware_entry_failure_reason = 0x%llx\n",
@@ -1354,8 +1426,22 @@ void execute(VM *vm)
       hwaddr size = vm->run->memory.size;
       bool private = vm->run->memory.flags & KVM_MEMORY_EXIT_FLAG_PRIVATE;
       ret = kvm_convert_memory(vm,start,size,private);
-      
       break;
+    /*case KVM_EXIT_MMIO:
+      if(vm->run->mmio.is_write){
+        printf("VMM read the write from TD at gpa 0x%llx,length 0x%x\n",vm->run->mmio.phys_addr,vm->run->mmio.len);
+        printf("data from kvm_run: 0x");
+        for(int i=0;i<8;i++){
+          printf("%x",vm->run->mmio.data[i]);
+        }
+        printf("\n");
+        printf("data at gpa: 0x");
+        for(int i=0;i<8;i++){
+          printf("%x", *(char *)(vm->regions->kvm_mr->region.userspace_addr+vm->run->mmio.phys_addr+i));
+        }
+        printf("\n");
+      }
+      break;*/
     default:
       error("Unhandled reason: %d\n", vm->run->exit_reason);
       break;
