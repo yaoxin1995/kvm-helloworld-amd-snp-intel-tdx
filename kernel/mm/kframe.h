@@ -2,10 +2,9 @@
 #define _KFRAME_H
 #include <stdint.h>
 
-#define KFRAME_CACHE_SIZE 16
-#define KFRAME_CACHE_AVAILABLE 0x0
-#define KFRAME_CACHE_EMPTY 0xFF
 #define KFRAME_SIZE 0x1000
+#define KFRAME_FREE 0x00
+#define KFRAME_USED 0xFF
 
 /* frame_start ==> physical address of frame to manage
  * size ==> size in bytes from frame_start to the end of frames region
