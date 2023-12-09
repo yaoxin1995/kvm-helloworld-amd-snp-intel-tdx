@@ -11,7 +11,7 @@
 #define PROT_RW (PROT_R | PROT_W)
 #define PROT_RWX (PROT_RW | PROT_X)
 #define IA32_EFER 0xC0000080
-#define SHARED_BIT 0x8000000000000 //bit(51)
+#define SHARED_BIT (1UL<<51) //bit(51)
 
 /* 64-bit page * entry bits */
 #define PDE64_PRESENT 1

@@ -18,7 +18,6 @@ static inline uint64_t* get_pml4_addr() {
 #define PDPOFF(v) _OFFSET(v, 30)
 #define PDOFF(v) _OFFSET(v, 21)
 #define PTOFF(v) _OFFSET(v, 12)
-
 /* if vaddr is already mapping to some address, overwrite it. */
 void add_trans_user(void* vaddr_, void* paddr_, int prot) {
   uint64_t vaddr = (uint64_t) vaddr_;
@@ -101,20 +100,20 @@ int pf_to_prot(Elf64_Word pf) {
 }
 
 int set_shared_bit(uint64_t *vaddr, uint64_t len){
-  if((uint64_t)vaddr & 0xfff) panic("vaddr should aligned with page size 4KB");
+  if((uint64_t)vaddr & 0xfff) panic("set_shared_bit:vaddr should aligned with page size 4KB");
+  if((uint64_t)len & 0xfff) panic("set_shared_bit:len should aligned with page size 4KB");
   uint64_t *pml4 = get_pml4_addr(), *pdp, *pd, *pt;
   uint64_t vaddr_end = (uint64_t)vaddr+len;
-  while((uint64_t)vaddr < vaddr_end){
+  for(uint64_t i=(uint64_t)vaddr;i<vaddr_end;i+=PAGE_SIZE){
     #define PAGING(p, c) do { \
         if(!(*p & PDE64_PRESENT)) return -1; \
         c = (uint64_t*) ((*p & -0x1000) | KERNEL_BASE_OFFSET);\
         } while(0);
-      PAGING(&pml4[PML4OFF(vaddr)], pdp);
-      PAGING(&pdp[PDPOFF(vaddr)], pd);
-      PAGING(&pd[PDOFF(vaddr)], pt);
+      PAGING(&pml4[PML4OFF((uint64_t*)i)], pdp);
+      PAGING(&pdp[PDPOFF((uint64_t*)i)], pd);
+      PAGING(&pd[PDOFF((uint64_t*)i)], pt);
     #undef PAGING
-    pt[PTOFF(vaddr)]|=SHARED_BIT;
-    vaddr+=PAGE_SIZE;
+    pt[PTOFF((uint64_t*)i)]|=SHARED_BIT;
   }
   return 0;
 }
@@ -123,17 +122,16 @@ int clear_shared_bit(uint64_t *vaddr, uint64_t len){
   if((uint64_t)vaddr & 0xfff) panic("vaddr should aligned with page size 4KB");
   uint64_t *pml4 = get_pml4_addr(), *pdp, *pd, *pt;
   uint64_t vaddr_end = (uint64_t)vaddr+len;
-  while((uint64_t)vaddr < vaddr_end){
+  for(uint64_t i=(uint64_t)vaddr;i<vaddr_end;i+=PAGE_SIZE){
     #define PAGING(p, c) do { \
         if(!(*p & PDE64_PRESENT)) return -1; \
         c = (uint64_t*) ((*p & -0x1000) | KERNEL_BASE_OFFSET);\
         } while(0);
-      PAGING(&pml4[PML4OFF(vaddr)], pdp);
-      PAGING(&pdp[PDPOFF(vaddr)], pd);
-      PAGING(&pd[PDOFF(vaddr)], pt);
+      PAGING(&pml4[PML4OFF((uint64_t*)i)], pdp);
+      PAGING(&pdp[PDPOFF((uint64_t*)i)], pd);
+      PAGING(&pd[PDOFF((uint64_t*)i)], pt);
     #undef PAGING
-    pt[PTOFF(vaddr)] &= (SHARED_BIT-1);
-    vaddr+=PAGE_SIZE;
+    pt[PTOFF((uint64_t*)i)] &= (SHARED_BIT-1);
   }
   return 0;
 }

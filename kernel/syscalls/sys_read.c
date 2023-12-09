@@ -7,11 +7,13 @@
 #include <utils/string.h>
 
 int64_t sys_read(int fildes, void *buf, uint64_t nbyte) {
+  write_in_console("enter sys_read\n");
   if(fildes < 0) return -EBADF;
   if(!access_ok(VERIFY_WRITE, buf, nbyte)) return -EFAULT;
   void *dst = smalloc(nbyte, MALLOC_NO_ALIGN);
   int64_t ret = hp_read(fildes, physical(dst), nbyte);
   if(ret >= 0) memcpy(buf, dst, ret);
   sfree(dst);
+  write_in_console("sys_read returned\n");
   return ret;
 }

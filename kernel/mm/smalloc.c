@@ -112,6 +112,7 @@ static void *int_smalloc(uint64_t nb, int align) {
 
 #define alignup(v, p) (((v) & ((p)-1)) ? (((v) & (-(p))) + (p)) : (v))
 void *smalloc(uint64_t len, int align) {
+  unsigned char buffer[20] = {0};
   if(len >= (1ull << 32)) return 0; // fast fail
   uint64_t nb = alignup(len + offsetof(struct chunk, next), 0x80);
   void *victim = int_smalloc(nb, align);
@@ -119,13 +120,29 @@ void *smalloc(uint64_t len, int align) {
     ((uint64_t) victim & (align - 1))
     ) panic("smalloc.c#smalloc: alignment request failed");
   /* always clean up */
+  uint64_to_string((uint64_t)victim,buffer);
+  write_in_console("smalloc get address: 0x");
+  write_in_console((char*)buffer);
+  uint64_to_string((uint64_t)len,buffer);
+  write_in_console(" len: 0x");
+  write_in_console((char*)buffer);
+  write_in_console("\n");
   memset(victim, 0, len);
+  write_in_console("smalloc memset finished\n");
   return victim;
 }
 
 void sfree(void *mem) {
+  unsigned char buffer[20] = {0};
+  uint64_to_string((uint64_t)mem,buffer);
+  write_in_console("sfree started address:0x");
+  write_in_console((char*)buffer);
   if(mem == 0) return;
   struct chunk* c = mem2chunk(mem);
+  uint64_to_string((uint64_t)c->size,buffer);
+  write_in_console("size:0x");
+  write_in_console((char*)buffer);
+  write_in_console("\n");
   if(invalid_chunk_size(c->size)) panic("smalloc.c#sfree: invalid size");
   if(c->size + (void*)c == shared_arena.top) {
     shared_arena.top = (void*) c;
@@ -133,4 +150,5 @@ void sfree(void *mem) {
     c->size = 0;
   }
   else insert_sorted(c);
+  write_in_console("sfree finished");
 }

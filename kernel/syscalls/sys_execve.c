@@ -18,10 +18,10 @@ static int load_binary(int fd, process* p) {
   write_in_console("Start reading binary from hypervisor\n");
   void *buf = smalloc(0x1000, MALLOC_NO_ALIGN);
   hp_read(fd, physical(buf), 0x1000);
+  write_in_console("hp_read returned\n");
   Elf64_Ehdr *ehdr = (Elf64_Ehdr*) buf;
   if(memcmp(ehdr->e_ident, "\177ELF\x02\x01\x01\0\0\0\0\0\0\0\0\0", 16) != 0)
     return -ENOEXEC;
-  write_in_console("load_binary 1\n");
   p->entry = ehdr->e_entry;
   p->load_addr = 0;
   if(ehdr->e_type != ET_EXEC && ehdr->e_type != ET_DYN) return -ENOEXEC;
@@ -31,7 +31,6 @@ static int load_binary(int fd, process* p) {
   if(ehdr->e_phoff + (uint64_t) ehdr->e_phentsize * ehdr->e_phnum > 0x1000)
     return -EINVAL;
 
-  write_in_console("load_binary 2\n");
   Elf64_Phdr *phdr = (Elf64_Phdr*) ((uint8_t*) buf + ehdr->e_phoff);
   for(int i = 0; i < ehdr->e_phnum; i++, phdr++)
     if(phdr->p_type == PT_LOAD) {
@@ -40,7 +39,7 @@ static int load_binary(int fd, process* p) {
                ed = p->load_addr + alignup(phdr->p_vaddr + sz);
       int prot = pf_to_prot(phdr->p_flags);
       /* not a good idea, but it works */
-      write_in_console("load_binary 3\n");
+
       void *r = sys_mmap(
         (void*) st, sz + (phdr->p_offset & 0xfff), prot,
         MAP_FIXED, fd, phdr->p_offset & -0x1000

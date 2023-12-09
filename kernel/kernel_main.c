@@ -10,6 +10,7 @@
 #include <mm/gdt.h>
 #include <mm/idt.h>
 #include <utils/panic.h>
+#include "../../.parameters"
 
 #define MSR_STAR 0xc0000081 /* legacy mode SYSCALL target */
 #define MSR_LSTAR 0xc0000082 /* long mode SYSCALL target */
@@ -99,7 +100,8 @@ int kernel_main_tdx(uint64_t hob, uint64_t _payload) {
   set_shared_bit((uint64_t*)(dma | KERNEL_BASE_OFFSET),DMA_SIZE);
   tdvmcall_mapgpa(true,dma,DMA_SIZE);
   init_allocator_shared((void*)( dma | KERNEL_BASE_OFFSET), DMA_SIZE);
-
+  memset((void*)( dma | KERNEL_BASE_OFFSET),0x0,DMA_SIZE);
+  
   write_in_console("Start setting gdt.\n");
   gdt = (struct gdt_entry *)(get_usable(PAGE_SIZE)|KERNEL_BASE_OFFSET);
   tss = (struct tss *)(get_usable(PAGE_SIZE)|KERNEL_BASE_OFFSET);
@@ -119,18 +121,26 @@ int kernel_main_tdx(uint64_t hob, uint64_t _payload) {
   uint64_t stack = get_usable(STACK_SIZE)|KERNEL_BASE_OFFSET;
   uint64_t stack_top = stack + STACK_SIZE;
 
-  asm("mov rsp, %0"::"r"(stack_top));
+  asm("mov rsp, %0;"
+      "mov rbp, rsp;"
+       ::"r"(stack_top));
+  int parameters_argc = ARGC;
+  int parameters_argv_len = ARGV_LEN;
+  char* parameters = PARAMETERS;
   struct argv_struct{
-    char *argv[2];
-    char buffer[30];
+    char *argv[parameters_argc];
+    char buffer[parameters_argv_len];
   };
   struct argv_struct argvs;
   memset(argvs.buffer,0x0,sizeof(argvs.buffer));
-  char * string = "./orw.elf\0./test_output";
-  memcpy(argvs.buffer,string,24);
-  argvs.argv[0] = argvs.buffer;
-  argvs.argv[1] = &argvs.buffer[11];
+  memcpy(argvs.buffer,parameters,parameters_argv_len);
+
+  int buffer_count = 0;
+  for(int i=0;i<parameters_argc;i++){
+    argvs.argv[i] = &argvs.buffer[buffer_count];
+    buffer_count = strlen(&argvs.buffer[buffer_count])+1;
+  }
   
-  switch_user(2, argvs.argv);
+  switch_user(parameters_argc, argvs.argv);
   return 0;
 }
