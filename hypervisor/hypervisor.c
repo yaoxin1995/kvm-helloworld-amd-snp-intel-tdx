@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#define TDHOB
 #include <fcntl.h>
 #include <linux/kvm.h>
 #include <stdint.h>
@@ -11,9 +12,11 @@
 #include "debug.h"
 #include "definition.h"
 #include "hypercall.h"
+#include "tdvf-hob.h"
+#include <glib.h>
+#include "pc_sysfw_ovmf.h"
 
-
-#define MSR_IA32_APICBASE  0x1b
+#define MSR_IA32_APICBASE 0x1b
 #define X2APIC 21
 #define XAPIC_ENABLE 10
 #define X2APIC_ENABLE 11
@@ -21,28 +24,42 @@
 #define APIC_DEFAULT_ADDRESS 0xfee00000
 #define PS_LIMIT (0x200000)
 #define KERNEL_STACK_SIZE (0x4000)
+
+#define TDG_VP_VMCALL_INVALID_OPERAND 0x8000000000000000ULL
+#define TDG_VP_VMCALL_MAP_GPA 0x10001ULL
+#define TDG_VP_VMCALL_GET_QUOTE 0x10002ULL
+#define TDG_VP_VMCALL_REPORT_FATAL_ERROR 0x10003ULL
+#define TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT 0x10004ULL
 /*
  * setup_paging() and init_pagetable() in kernel/mm/translate.c uses 5 pages in total
  */
 #define PAGE_TABLE_SIZE (0x5000)
 #define MAX_KERNEL_SIZE (PS_LIMIT - PAGE_TABLE_SIZE - KERNEL_STACK_SIZE)
-#define MEM_SIZE (PS_LIMIT * 0x2)
-#define BIT(nr)			(UL(1) << (nr))
+#define MEM_SIZE 0x100000000// 4GB  
+#define BIT(nr) (0x1UL << (nr))
 
 
 
-void read_file(const char *filename, uint8_t** content_ptr, size_t* size_ptr) {
+static TdxGuest *tdx_guest;
+void read_file(const char *filename, uint8_t **content_ptr, size_t *size_ptr)
+{
   FILE *f = fopen(filename, "rb");
-  if(f == NULL) error("Open file '%s' failed.\n", filename);
-  if(fseek(f, 0, SEEK_END) < 0) pexit("fseek(SEEK_END)");
+  if (f == NULL)
+    error("Open file '%s' failed.\n", filename);
+  if (fseek(f, 0, SEEK_END) < 0)
+    pexit("fseek(SEEK_END)");
 
   size_t size = ftell(f);
-  if(size == 0) error("Empty file '%s'.\n", filename);
-  if(fseek(f, 0, SEEK_SET) < 0) pexit("fseek(SEEK_SET)");
+  if (size == 0)
+    error("Empty file '%s'.\n", filename);
+  if (fseek(f, 0, SEEK_SET) < 0)
+    pexit("fseek(SEEK_SET)");
 
-  uint8_t *content = (uint8_t*) malloc(size);
-  if(content == NULL) error("read_file: Cannot allocate memory\n");
-  if(fread(content, 1, size, f) != size) error("read_file: Unexpected EOF\n");
+  uint8_t *content = (uint8_t *)malloc(size);
+  if (content == NULL)
+    error("read_file: Cannot allocate memory\n");
+  if (fread(content, 1, size, f) != size)
+    error("read_file: Unexpected EOF\n");
 
   fclose(f);
   *content_ptr = content;
@@ -56,31 +73,36 @@ void read_file(const char *filename, uint8_t** content_ptr, size_t* size_ptr) {
  * set rsi = MEM_SIZE - rdi (total length of free pages)
  * Kernel could use rdi and rsi to initialize its memory allocator.
  */
-void setup_regs(VM *vm, size_t entry) {
+void setup_regs(VM *vm, size_t entry)
+{
   struct kvm_regs regs;
-  if(ioctl(vm->vcpufd, KVM_GET_REGS, &regs) < 0) pexit("ioctl(KVM_GET_REGS)");
+  if (ioctl(vm->vcpufd, KVM_GET_REGS, &regs) < 0)
+    pexit("ioctl(KVM_GET_REGS)");
   regs.rip = entry;
-  regs.rsp = PS_LIMIT; /* temporary stack */
-  regs.rdi = PS_LIMIT; /* start of free pages */
+  regs.rsp = PS_LIMIT;            /* temporary stack */
+  regs.rdi = PS_LIMIT;            /* start of free pages */
   regs.rsi = MEM_SIZE - regs.rdi; /* total length of free pages */
   regs.rflags = 0x2;
-  if(ioctl(vm->vcpufd, KVM_SET_REGS, &regs) < 0) pexit("ioctl(KVM_SET_REGS");
+  if (ioctl(vm->vcpufd, KVM_SET_REGS, &regs) < 0)
+    pexit("ioctl(KVM_SET_REGS");
 }
 
 /* Maps:
  * 0 ~ 0x200000 -> 0 ~ 0x200000 with kernel privilege
  */
-void setup_paging(VM *vm) {
+void setup_paging(VM *vm)
+{
   struct kvm_sregs sregs;
-  if(ioctl(vm->vcpufd, KVM_GET_SREGS, &sregs) < 0) pexit("ioctl(KVM_GET_SREGS)");
+  if (ioctl(vm->vcpufd, KVM_GET_SREGS, &sregs) < 0)
+    pexit("ioctl(KVM_GET_SREGS)");
   uint64_t pml4_addr = MAX_KERNEL_SIZE;
-  uint64_t *pml4 = (void*) (vm->mem + pml4_addr);
+  uint64_t *pml4 = (void *)(vm->mem + pml4_addr);
 
   uint64_t pdp_addr = pml4_addr + 0x1000;
-  uint64_t *pdp = (void*) (vm->mem + pdp_addr);
+  uint64_t *pdp = (void *)(vm->mem + pdp_addr);
 
   uint64_t pd_addr = pdp_addr + 0x1000;
-  uint64_t *pd = (void*) (vm->mem + pd_addr);
+  uint64_t *pd = (void *)(vm->mem + pd_addr);
 
   pml4[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pdp_addr;
   pdp[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pd_addr;
@@ -93,29 +115,32 @@ void setup_paging(VM *vm) {
   sregs.efer = EFER_LME | EFER_LMA;
   sregs.efer |= EFER_SCE; /* enable syscall instruction */
 
-  if(ioctl(vm->vcpufd, KVM_SET_SREGS, &sregs) < 0) pexit("ioctl(KVM_SET_SREGS)");
+  if (ioctl(vm->vcpufd, KVM_SET_SREGS, &sregs) < 0)
+    pexit("ioctl(KVM_SET_SREGS)");
 }
 
-void setup_seg_regs(VM *vm) {
+void setup_seg_regs(VM *vm)
+{
   struct kvm_sregs sregs;
-  if(ioctl(vm->vcpufd, KVM_GET_SREGS, &sregs) < 0) pexit("ioctl(KVM_GET_SREGS)");
+  if (ioctl(vm->vcpufd, KVM_GET_SREGS, &sregs) < 0)
+    pexit("ioctl(KVM_GET_SREGS)");
   struct kvm_segment seg = {
-    .base = 0,
-    .limit = 0xffffffff,
-    .selector = 1 << 3,
-    .present = 1,
-    .type = 0xb, /* Code segment */
-    .dpl = 0, /* Kernel: level 0 */
-    .db = 0,
-    .s = 1,
-    .l = 1, /* long mode */
-    .g = 1
-  };
+      .base = 0,
+      .limit = 0xffffffff,
+      .selector = 1 << 3,
+      .present = 1,
+      .type = 0xb, /* Code segment */
+      .dpl = 0,    /* Kernel: level 0 */
+      .db = 0,
+      .s = 1,
+      .l = 1, /* long mode */
+      .g = 1};
   sregs.cs = seg;
   seg.type = 0x3; /* Data segment */
   seg.selector = 2 << 3;
   sregs.ds = sregs.es = sregs.fs = sregs.gs = sregs.ss = seg;
-  if(ioctl(vm->vcpufd, KVM_SET_SREGS, &sregs) < 0) pexit("ioctl(KVM_SET_SREGS)");
+  if (ioctl(vm->vcpufd, KVM_SET_SREGS, &sregs) < 0)
+    pexit("ioctl(KVM_SET_SREGS)");
 }
 
 /*
@@ -124,148 +149,491 @@ void setup_seg_regs(VM *vm) {
  * normal x86-64 assembled code as well. Which let us easier to debug and test.
  *
  */
-void setup_long_mode(VM *vm) {
+void setup_long_mode(VM *vm)
+{
   setup_paging(vm);
   setup_seg_regs(vm);
 }
 
+int get_tdx_capabilities(int vmfd, struct kvm_tdx_capabilities *caps)
+{
+  int r, nr_cpuid_configs;
+  nr_cpuid_configs = 6; // Tdx first generation;
+  struct kvm_tdx_cmd cmd;
+  memset(&cmd, 0x0, sizeof(cmd));
+  cmd.id = KVM_TDX_CAPABILITIES;
+  cmd.data = (__u64)caps;
+  do
+  {
+    int size = sizeof(struct kvm_tdx_capabilities) +
+               nr_cpuid_configs * sizeof(struct kvm_tdx_cpuid_config);
+    caps = (struct kvm_tdx_capabilities *)malloc(size);
+    memset(caps, 0x0, size);
+    r = ioctl(vmfd, KVM_MEMORY_ENCRYPT_OP, cmd);
+    caps->nr_cpuid_configs = nr_cpuid_configs;
+    if (r == -E2BIG)
+    {
+      free(caps);
+      nr_cpuid_configs *= 2;
+    }
+  } while (r == -E2BIG);
+  if (r)
+    free(caps);
+  return r;
+}
 
-VM* kvm_init(uint8_t code[], size_t len) {
-  struct kvm_tdx_capabilities *caps;
-  int kvmfd = open("/dev/kvm", O_RDWR | O_CLOEXEC);
-  if(kvmfd < 0) pexit("open(/dev/kvm)");
+int set_kvm_max_vcpu(int vmfd, int max_vcpu)
+{
+  struct kvm_enable_cap enabled_cap;
+  memset(&enabled_cap, 0x0, sizeof(enabled_cap));
+  enabled_cap.cap = KVM_CAP_MAX_VCPUS;
+  enabled_cap.args[0] = max_vcpu;
+  int r = ioctl(vmfd, KVM_ENABLE_CAP, enabled_cap);
+  return r;
+}
 
-  //Check which vm type in KVM is supported, now first bit is legacy vm, second bit is protected vm
-  int tdx_is_supported = ioctl(kvmfd, KVM_CHECK_EXTENSION, KVM_CAP_VM_TYPES);
-  if(!(tdx_is_supported& BIT(KVM_X86_PROTECTED_VM))) pexit("Protected VM is not supported in kvm");
+int initialize_tdx_vm(int vmfd, struct kvm_tdx_init_vm *vm_paras)
+{
+  struct kvm_tdx_cmd cmd;
+  memset(&cmd, 0x0, sizeof(cmd));
+  cmd.id = KVM_TDX_INIT_VM;
+  cmd.data = (__u64)vm_paras;
+  int r = ioctl(vmfd, KVM_MEMORY_ENCRYPT_OP, cmd);
+  return r;
+}
 
-  //Check KVM version
-  int api_ver = ioctl(kvmfd, KVM_GET_API_VERSION, 0);
-	if(api_ver < 0) pexit("KVM_GET_API_VERSION");
-  if(api_ver != KVM_API_VERSION) {
-    error("Got KVM api version %d, expected %d\n",
-      api_ver, KVM_API_VERSION);
+int tdx_vcpu_init(int vcpufd, __u64 vcpu_rcx)
+{
+  struct kvm_tdx_cmd cmd;
+  memset(&cmd, 0x0, sizeof(cmd));
+  cmd.id = KVM_TDX_INIT_VCPU;
+  cmd.data = vcpu_rcx;
+  int r = ioctl(vcpufd, KVM_MEMORY_ENCRYPT_OP, cmd);
+  return r;
+}
+
+
+int get_tdx_cpuid(int kvmfd,struct kvm_cpuid2 *cpuid)
+{
+  int number = 10;
+  int r;
+  do{
+    cpuid = (struct kvm_cpuid2 *)malloc(sizeof(struct kvm_cpuid2)+sizeof(struct kvm_cpuid_entry2)*number);
+    cpuid->nent = number;
+    r = ioctl(kvmfd,KVM_GET_SUPPORTED_CPUID,cpuid);
+    if(r < 0){
+        if(r == -E2BIG){
+            free(cpuid);
+            number += 5;
+        }
+        if(r == -ENOMEM){
+            free(cpuid);
+            number -= 3;
+        }
+        else{
+            free(cpuid);
+            return -1;
+        }
+    }
+  }while(r < 0);
+  return 0;
+}
+
+int enalbe_x2apic(int vcpufd, int kvmfd)
+{
+  struct kvm_cpuid2 *cpuid;
+  int r = get_tdx_cpuid(kvmfd, cpuid);
+  if(r < 0){
+    pexit("Get supported CPUID failed");
+  }
+  cpuid->entries[0x1].ecx |= BIT(X2APIC);
+  r = ioctl(vcpufd, KVM_SET_CPUID2, cpuid);
+  free(cpuid);
+  return r;
+}
+
+
+int encrypt_tdx_memory(int vcpufd, void *mem_region, int len, int flag)
+{
+  
+  struct kvm_tdx_cmd cmd;
+  memset(&cmd, 0x0, sizeof(cmd));
+  cmd.id = KVM_TDX_INIT_VCPU;
+  cmd.data = (__u64)mem_region;
+  cmd.flags = flag;
+  int r = ioctl(vcpufd, KVM_MEMORY_ENCRYPT_OP, cmd);
+  return r;
+}
+
+int finalize_td(int vmfd)
+{
+  struct kvm_tdx_cmd cmd;
+  memset(&cmd, 0x0, sizeof(cmd));
+  cmd.id = KVM_TDX_FINALIZE_VM;
+  int r = ioctl(vmfd, KVM_MEMORY_ENCRYPT_OP, cmd);
+  return r;
+}
+
+void set_para_cpuid(struct kvm_tdx_init_vm *para, struct kvm_tdx_capabilities *caps)
+{
+  for (int i = 0; i < caps->nr_cpuid_configs; i++)
+  {
+    para->cpuid.entries[i].function = caps->cpuid_configs[i].leaf;
+    para->cpuid.entries[i].index = caps->cpuid_configs[i].sub_leaf;
+    __asm__("mov %%eax, %4\n\t"
+            "mov %%ecx, %5\n\t"
+            "cpuid \n\t "
+            "mov %%eax, %0\n\t"
+            "mov %%ebx, %1\n\t"
+            "mov %%ecx, %2\n\t"
+            "mov %%edx, %3\n\t"
+            : "=m"(para->cpuid.entries[i].eax), "=m"(para->cpuid.entries[i].ebx),
+              "=m"(para->cpuid.entries[i].ecx), "=m"(para->cpuid.entries[i].edx)
+            : "m"(caps->cpuid_configs[i].leaf), "m"(caps->cpuid_configs[i].sub_leaf)
+            : "%eax", "%ebx", "%ecx", "%edx");
+    para->cpuid.entries[i].eax &= caps->cpuid_configs[i].eax;
+    para->cpuid.entries[i].ebx &= caps->cpuid_configs[i].ebx;
+    para->cpuid.entries[i].ecx &= caps->cpuid_configs[i].ecx;
+    para->cpuid.entries[i].edx &= caps->cpuid_configs[i].edx;
+  }
+  return;
+}
+
+int tdx_handle_map_gpa(struct kvm_tdx_vmcall *vmcall, VM *vm){
+  return 0;
+}
+int tdx_handle_get_quote(struct kvm_tdx_vmcall *vmcall, VM *vm){
+  return 0;
+}
+int tdx_handle_report_fatal_error(struct kvm_tdx_vmcall *vmcall, VM *vm){
+  return 0;
+}
+int tdx_handle_setup_event_notify_interrupt(struct kvm_tdx_vmcall *vmcall, VM *vm){
+  return 0;
+}
+// from QEMU
+void tdx_handle_exit(struct kvm_tdx_vmcall *vmcall, VM *vm)
+{
+  vmcall->status_code = TDG_VP_VMCALL_INVALID_OPERAND;
+  if (vmcall->type != 0)
+  {
+    warn_report("unknown tdg.vp.vmcall type 0x%llx subfunction 0x%llx",
+                vmcall->type, vmcall->subfunction);
+    return;
   }
 
-  //Create VM
-  int vmfd = ioctl(kvmfd, KVM_CREATE_VM, 0);
-  if(vmfd < 0) pexit("ioctl(KVM_CREATE_VM)");
-  //Query if TDX is supported on the platform
-  if(get_tdx_capabilities(vmfd,caps) < 0) pexit("Get TDX capabilities failed");
-  //Set kvm max vcpu
-  if(set_kvm_max_vcpu(vmfd, KVM_CAP_MAX_VCPUS) < 0) pexit("Set max vcpus failed");
-  //Set TSC frequency
-  int frequency;
-  if(iotctl(vmfd, KVM_SET_TSC_KHZ, frequency) < 0) pexit("Set TSC freqeuncy failed");
-  //Initialize TDX VM,attributes,mrconfigid,mrowner,mrownerconfig,cpuid should be initialized here.
-  //For cpuid, should use caps to mask the unconfigurable cpuid to keep local cpuid settings same with TDX Module inside.
-  struct kvm_tdx_init_vm vm_paras;
-  //todo initialization
-  if(initialize_tdx_vm(vmfd,&vm_paras) < 0) pexit("Initialize TDX VM failed");
+  switch (vmcall->subfunction)
+  {
+  case TDG_VP_VMCALL_MAP_GPA:
+    tdx_handle_map_gpa(vmcall, vm);
+    printf("Map GPA\n");
+    break;
+  case TDG_VP_VMCALL_GET_QUOTE:
+    tdx_handle_get_quote(vmcall, vm);
+    printf("Get Quote\n");
+    break;
+  case TDG_VP_VMCALL_REPORT_FATAL_ERROR:
+    tdx_handle_report_fatal_error(vmcall, vm);
+    printf("Fatal Error\n");
+    break;
+  case TDG_VP_VMCALL_SETUP_EVENT_NOTIFY_INTERRUPT:
+    tdx_handle_setup_event_notify_interrupt(vmcall, vm);
+    printf("Set event notify interrupt\n");
+    break;
+  default:
+    warn_report("unknown tdg.vp.vmcall type 0x%llx subfunction 0x%llx",
+                vmcall->type, vmcall->subfunction);
+    break;
+  }
+  return;
+}
 
-  //Create vcpu
-  //Assume there is only one vcpu
+
+
+static void tdx_init_ram_entries(void)
+{
+  unsigned nr_e820_entries;
+  nr_e820_entries = 1;
+  tdx_guest->ram_entries = g_new(TdxRamEntry, nr_e820_entries);
+  tdx_guest->ram_entries[0].address = 0xc800000;//200MB for ROM
+  tdx_guest->ram_entries[0].length = 0xe0000000-0xc800000;//200MB-3.5GB
+  tdx_guest->ram_entries[0].type = TDX_RAM_UNACCEPTED;
+};
+
+static int tdx_ram_entry_compare(const void *lhs_, const void* rhs_)
+{
+    const TdxRamEntry *lhs = lhs_;
+    const TdxRamEntry *rhs = rhs_;
+
+    if (lhs->address == rhs->address) {
+        return 0;
+    }
+    if (le64_to_cpu(lhs->address) > le64_to_cpu(rhs->address)) {
+        return 1;
+    }
+    return -1;
+}
+
+static TdxFirmwareEntry *tdx_get_hob_entry(TdxGuest *tdx)
+{
+    TdxFirmwareEntry *entry;
+
+    for_each_tdx_fw_entry(&tdx->tdvf, entry) {
+        if (entry->type == TDVF_SECTION_TYPE_TD_HOB) {
+            return entry;
+        }
+    }
+    error_report("TDVF metadata doesn't specify TD_HOB location.");
+    exit(1);
+}
+
+
+int kvm_encrypt_reg_region(int vmfd, hwaddr start, hwaddr size, bool reg_region)
+{
+    int r;
+    struct kvm_memory_attributes  attr;
+    attr.attributes = reg_region ? KVM_MEMORY_ATTRIBUTE_PRIVATE : 0;
+
+    attr.address = start;
+    attr.size = size;
+    attr.flags = 0;
+
+    r = ioctl(vmfd, KVM_SET_MEMORY_ATTRIBUTES, &attr);
+    if (r || attr.size != 0) {
+        warn_report("%s: failed to set memory attr (0x%lx+%#zx) error '%s'",
+                     __func__, start, size, strerror(errno));
+    }
+    return r;
+}
+
+VM *kvm_init(uint8_t code[], size_t len,uint8_t code_kernel[],size_t len_kernel)
+{
+
+  struct kvm_tdx_capabilities *caps;
+  int kvmfd = open("/dev/kvm", O_RDWR | O_CLOEXEC);
+  if (kvmfd < 0)
+    pexit("open(/dev/kvm)");
+
+  // Check which vm type in KVM is supported, now first bit is legacy vm, second bit is protected vm
+  int tdx_is_supported = ioctl(kvmfd, KVM_CHECK_EXTENSION, KVM_CAP_VM_TYPES);
+  if (!(tdx_is_supported & BIT(KVM_X86_PROTECTED_VM)))
+    pexit("Protected VM is not supported in kvm");
+
+  // Check KVM version
+  int api_ver = ioctl(kvmfd, KVM_GET_API_VERSION, 0);
+  if (api_ver < 0)
+    pexit("KVM_GET_API_VERSION");
+  if (api_ver != KVM_API_VERSION)
+  {
+    error("Got KVM api version %d, expected %d\n",
+          api_ver, KVM_API_VERSION);
+  }
+
+  // Create VM
+  int vmfd = ioctl(kvmfd, KVM_CREATE_VM, 0);
+  if (vmfd < 0)
+    pexit("ioctl(KVM_CREATE_VM)");
+  // Query if TDX is supported on the platform
+  if (get_tdx_capabilities(vmfd, caps) < 0)
+    pexit("Get TDX capabilities failed");
+  // Set kvm max vcpu
+  if (set_kvm_max_vcpu(vmfd, KVM_CAP_MAX_VCPUS) < 0)
+    pexit("Set max vcpus failed");
+  // Set TSC frequency, optional
+  int frequency = 1000000; //1 GHZ
+  if (ioctl(vmfd, KVM_SET_TSC_KHZ, frequency) < 0)
+    pexit("Set TSC freqeuncy failed");
+  // Initialize TDX VM,attributes,mrconfigid,mrowner,mrownerconfig,cpuid should be initialized here.
+  // For cpuid, should use caps to mask the unconfigurable cpuid to keep local cpuid settings same with TDX Module inside.
+  int size = sizeof(struct kvm_tdx_init_vm) +
+             caps->nr_cpuid_configs * sizeof(struct kvm_cpuid2);
+  struct kvm_tdx_init_vm *vm_paras = (struct kvm_tdx_init_vm *)malloc(size);
+  memset(vm_paras, 0x0, size);
+  set_para_cpuid(vm_paras, caps);
+  if (initialize_tdx_vm(vmfd, vm_paras) < 0)
+    pexit("Initialize TDX VM failed");
+
+  // Create vcpu
+  // Assume there is only one vcpu
   int vcpufd = ioctl(vmfd, KVM_CREATE_VCPU, 0);
-  if(vcpufd < 0) pexit("ioctl(KVM_CREATE_VCPU)");
-  //Pass TDX specific VCPU parameters, the TD HOB address, TD HOB should be created below TDVF
-  __u64 vcpu_rcx ;
-  if(tdx_vcpu_init(vcpufd, vcpu_rcx)<0) pexit("TDX vcpu initialized failed");
+  if (vcpufd < 0)
+    pexit("ioctl(KVM_CREATE_VCPU)");
+
+  // TDVF should be copy to the memory,allocate memory for TDVF
+  // BVF,CVF
+  tdx_guest = g_new(TdxGuest,1);
+  void *mem = mmap(NULL,
+                   MEM_SIZE,
+                   PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_ANONYMOUS,
+                   -1, 0);
+  if (mem == NULL)
+    pexit("mmap(MEM_SIZE)");
+  memcpy((void *)mem, code, len);
+  void *mem_kernel = mem+len;
+  memcpy((void *)mem_kernel, code_kernel, len_kernel);
+  //parse tdvf and create td hob
+  TdxFirmware *tdvf = g_new(TdxFirmware, 1);
+  tdx_guest->tdvf = *tdvf;
+  TdxFirmwareEntry *entry;    
+  tdx_init_ram_entries();
+  pc_system_parse_ovmf_flash(mem, len);
+  tdvf_parse_metadata(tdvf, mem, len);
+  for_each_tdx_fw_entry(tdvf, entry)
+  {
+    switch (entry->type)
+    {
+    case TDVF_SECTION_TYPE_BFV:
+    case TDVF_SECTION_TYPE_CFV:
+      entry->mem_ptr = tdvf->mem_ptr + entry->data_offset;
+      break;
+    case TDVF_SECTION_TYPE_TD_HOB:
+    case TDVF_SECTION_TYPE_TEMP_MEM:
+    case TDVF_SECTION_TYPE_PERM_MEM:
+    case TDVF_SECTION_TYPE_PAYLOAD:
+    case TDVF_SECTION_TYPE_PAYLOAD_PARAM:
+      entry->mem_ptr = malloc(entry->size);
+      //tdx_accept_ram_range(entry->address, entry->size);
+      break;
+    default:
+      error_report("Unsupported TDVF section %d", entry->type);
+      exit(1);
+    }
+  }
+
+  qsort(tdx_guest->ram_entries, tdx_guest->nr_ram_entries,
+          sizeof(TdxRamEntry), &tdx_ram_entry_compare);
+  tdvf_hob_create(tdx_guest, tdx_get_hob_entry(tdx_guest), mem_kernel);
+
+  // Pass TDX specific VCPU parameters, the TD HOB address, TD HOB should be created below TDVF
+  TdxFirmwareEntry *hob;
+  hob = tdx_get_hob_entry(tdx_guest);
+  if (tdx_vcpu_init(vcpufd, hob->address) < 0)
+    pexit("TDX vcpu initialized failed");
   // Enable CPUID[0x1].ECX.X2APIC(bit 21)=1 so that the following setting of MSR_IA32_APIC_BASE success.
-  if(enalbe_x2apic(vcpufd)<0) pexit("Enable x2apic in set kvm cpuid failed");
-  //Set the initial reset value of MSR_IA32_APIC
-  struct kvm_msrs *msrs = (struct kvm_msrs *) malloc(sizeof(struct kvm_msrs)+sizeof(struct kvm_msr_entry));
-  msrs->nmsrs=1;
-  msrs->pad=0;
-  msrs->entries->index=MSR_IA32_APICBASE;//MSR_IA32_APICBASE is in header msr-index.h, not in usr/include,hould add a own difiniction header or define directly
-  msrs->entries->data = APIC_DEFAULT_ADDRESS| BIT(XAPIC_ENABLE)| BIT(X2APIC_ENABLE);   //MSR_IA32_APICBASE_BSP can be add optionally
-  msrs->entries->reserved=0;
-  if(ioctl(vcpufd,KVM_SET_MSRS,msrs)<0) pexit("Set apic base failed");
+  if (enalbe_x2apic(vcpufd,kvmfd) < 0)
+    pexit("Enable x2apic in set kvm cpuid failed");
+  // Set the initial reset value of MSR_IA32_APIC
+  struct kvm_msrs *msrs = (struct kvm_msrs *)malloc(sizeof(struct kvm_msrs) + sizeof(struct kvm_msr_entry));
+  msrs->nmsrs = 1;
+  msrs->pad = 0;
+  msrs->entries->index = MSR_IA32_APICBASE;                                            // MSR_IA32_APICBASE is in header msr-index.h, not in usr/include,hould add a own difiniction header or define directly
+  msrs->entries->data = APIC_DEFAULT_ADDRESS | BIT(XAPIC_ENABLE) | BIT(X2APIC_ENABLE); // MSR_IA32_APICBASE_BSP can be add optionally
+  msrs->entries->reserved = 0;
+  if (ioctl(vcpufd, KVM_SET_MSRS, msrs) < 0)
+    pexit("Set apic base failed");
   free(msrs);
 
-  //Initializing guest memory
-  //TDVF should be copy to the memory,allocate memory for TDVF
-  //BVF,CVF
-  void *mem = mmap(NULL,
-    MEM_SIZE,
-    PROT_READ | PROT_WRITE,
-    MAP_SHARED | MAP_ANONYMOUS,
-    -1, 0);
-  if(mem == NULL) pexit("mmap(MEM_SIZE)");
-  size_t entry = 0;
-  memcpy((void*) mem + entry, code, len);
+  
+  // Initializing guest memory
+  //allocate memory
   struct kvm_userspace_memory_region region = {
     .slot = 0,
     .flags = 0,
     .guest_phys_addr = 0,
     .memory_size = MEM_SIZE,
-    .userspace_addr = (size_t) mem
-  };
-  if(ioctl(vmfd, KVM_SET_USER_MEMORY_REGION, &region) < 0) {
+    .userspace_addr = (size_t)mem};
+  if (ioctl(vmfd, KVM_SET_USER_MEMORY_REGION, &region) < 0)
+  {
     pexit("ioctl(KVM_SET_USER_MEMORY_REGION)");
   }
-  //Encrypt a memory continuous region which corresponding to TDH.MEM.PAGE.ADD TDX SEAM call.
-  //Should call several times to encrypt separate memory regions parsed from TDVF.
-  if(encrypt_tdx_memory(vcpufd,mem,len) < 0) pexit("TDX memory initialization failed");
-  //Finalize td
-  if(finalize_td(vmfd)< 0) pexit("TDX finalization failed");
+  //encrypt memory
+  for_each_tdx_fw_entry(tdvf, entry) {
+      struct kvm_tdx_init_mem_region mem_region = {
+          .source_addr = (__u64)entry->mem_ptr,
+          .gpa = entry->address,
+          .nr_pages = entry->size / 4096,
+      };
+       //set kvm attribute to convert memory to private
+      int r = kvm_encrypt_reg_region(vmfd,entry->address, entry->size, true);
+      if (r < 0) {
+            error_report("Reserve initial private memory failed %s", strerror(-r));
+            exit(1);
+      }
+
+      __u32 flags = entry->attributes & TDVF_SECTION_ATTRIBUTES_MR_EXTEND ?
+                    KVM_TDX_MEASURE_MEMORY_REGION : 0;
+
+      if (encrypt_tdx_memory(vcpufd, &mem_region, len, flags) < 0)
+      pexit("TDX memory initialization failed");
+
+      if (entry->type == TDVF_SECTION_TYPE_TD_HOB ||
+          entry->type == TDVF_SECTION_TYPE_TEMP_MEM) {
+          free(entry->mem_ptr);
+          entry->mem_ptr = NULL;
+      }
+  }
+
+
+  // Finalize td
+  if (finalize_td(vmfd) < 0)
+    pexit("TDX finalization failed");
 
   size_t vcpu_mmap_size = ioctl(kvmfd, KVM_GET_VCPU_MMAP_SIZE, NULL);
-  struct kvm_run *run = (struct kvm_run*) mmap(0,
-    vcpu_mmap_size,
-    PROT_READ | PROT_WRITE,
-    MAP_SHARED,
-    vcpufd, 0);
+  struct kvm_run *run = (struct kvm_run *)mmap(0,
+                                               vcpu_mmap_size,
+                                               PROT_READ | PROT_WRITE,
+                                               MAP_SHARED,
+                                               vcpufd, 0);
 
-  VM *vm = (VM*) malloc(sizeof(VM));
+  VM *vm = (VM *)malloc(sizeof(VM));
   *vm = (struct VM){
-    .mem = mem,
-    .mem_size = MEM_SIZE,
-    .vcpufd = vcpufd,
-    .run = run
-  };
+      .mem = mem,
+      .mem_size = MEM_SIZE,
+      .vcpufd = vcpufd,
+      .run = run};
 
-  //registers are set by TDX Module, long mode is switched in TDVF
-  //setup_regs(vm, entry);
-  //setup_long_mode(vm);
+  // registers are set by TDX Module, long mode is switched in TDVF
+  // setup_regs(vm, entry);
+  // setup_long_mode(vm);
 
   return vm;
 }
 
-int check_iopl(VM *vm) {
+int check_iopl(VM *vm)
+{
   struct kvm_regs regs;
   struct kvm_sregs sregs;
-  if(ioctl(vm->vcpufd, KVM_GET_REGS, &regs) < 0) pexit("ioctl(KVM_GET_REGS)");
-  if(ioctl(vm->vcpufd, KVM_GET_SREGS, &sregs) < 0) pexit("ioctl(KVM_GET_SREGS)");
+  if (ioctl(vm->vcpufd, KVM_GET_REGS, &regs) < 0)
+    pexit("ioctl(KVM_GET_REGS)");
+  if (ioctl(vm->vcpufd, KVM_GET_SREGS, &sregs) < 0)
+    pexit("ioctl(KVM_GET_SREGS)");
   return sregs.cs.dpl <= ((regs.rflags >> 12) & 3);
 }
 
-void execute(VM* vm) {
-  while(1) {
+void execute(VM *vm)
+{
+  while (1)
+  {
     ioctl(vm->vcpufd, KVM_RUN, NULL);
-    //dump_regs(vm->vcpufd);
-    switch (vm->run->exit_reason) {
+    // dump_regs(vm->vcpufd);
+    switch (vm->run->exit_reason)
+    {
     case KVM_EXIT_HLT:
       fprintf(stderr, "KVM_EXIT_HLT\n");
       return;
     case KVM_EXIT_IO:
-      if(!check_iopl(vm)) error("KVM_EXIT_SHUTDOWN\n");
-      if(vm->run->io.port & HP_NR_MARK) {
-        if(hp_handler(vm->run->io.port, vm) < 0) error("Hypercall failed\n");
+      if (!check_iopl(vm))
+        error("KVM_EXIT_SHUTDOWN\n");
+      if (vm->run->io.port & HP_NR_MARK)
+      {
+        if (hp_handler(vm->run->io.port, vm) < 0)
+          error("Hypercall failed\n");
       }
-      else error("Unhandled I/O port: 0x%x\n", vm->run->io.port);
+      else
+        error("Unhandled I/O port: 0x%x\n", vm->run->io.port);
       break;
     case KVM_EXIT_FAIL_ENTRY:
       error("KVM_EXIT_FAIL_ENTRY: hardware_entry_failure_reason = 0x%llx\n",
-        vm->run->fail_entry.hardware_entry_failure_reason);
+            vm->run->fail_entry.hardware_entry_failure_reason);
     case KVM_EXIT_INTERNAL_ERROR:
       error("KVM_EXIT_INTERNAL_ERROR: suberror = 0x%x\n",
-        vm->run->internal.suberror);
+            vm->run->internal.suberror);
     case KVM_EXIT_SHUTDOWN:
       error("KVM_EXIT_SHUTDOWN\n");
-    //handle tdx specific exit
+    // handle tdx specific exit
     case KVM_EXIT_TDX:
-    //todo
-      tdx_handle_exit(vm->run->tdx);
+      tdx_handle_exit(&vm->run->tdx.u.vmcall, vm);
     default:
       error("Unhandled reason: %d\n", vm->run->exit_reason);
     }
@@ -273,132 +641,54 @@ void execute(VM* vm) {
 }
 
 /* copy argv onto kernel's stack */
-void copy_argv(VM* vm, int argc, char *argv[]) {
+void copy_argv(VM *vm, int argc, char *argv[])
+{
   struct kvm_regs regs;
-  if(ioctl(vm->vcpufd, KVM_GET_REGS, &regs) < 0) pexit("ioctl(KVM_GET_REGS)");
-  char *sp = (char*)vm->mem + regs.rsp;
-  char **copy = (char**) malloc(argc * sizeof(char*));
+  if (ioctl(vm->vcpufd, KVM_GET_REGS, &regs) < 0)
+    pexit("ioctl(KVM_GET_REGS)");
+  char *sp = (char *)vm->mem + regs.rsp;
+  char **copy = (char **)malloc(argc * sizeof(char *));
 #define STACK_ALLOC(sp, len) ({ sp -= len; sp; })
-  for(int i = argc - 1; i >= 0; i--) {
+  for (int i = argc - 1; i >= 0; i--)
+  {
     int len = strlen(argv[i]) + 1;
     copy[i] = STACK_ALLOC(sp, len);
     memcpy(copy[i], argv[i], len);
   }
-  sp = (char*) ((uint64_t) sp & -0x10);
+  sp = (char *)((uint64_t)sp & -0x10);
   /* push argv */
-  *(uint64_t*) STACK_ALLOC(sp, sizeof(char*)) = 0;
-  for(int i = argc - 1; i >= 0; i--)
-    *(uint64_t*) STACK_ALLOC(sp, sizeof(char*)) = copy[i] - (char*)vm->mem;
+  *(uint64_t *)STACK_ALLOC(sp, sizeof(char *)) = 0;
+  for (int i = argc - 1; i >= 0; i--)
+    *(uint64_t *)STACK_ALLOC(sp, sizeof(char *)) = copy[i] - (char *)vm->mem;
   /* push argc */
-  *(uint64_t*) STACK_ALLOC(sp, sizeof(uint64_t)) = argc;
+  *(uint64_t *)STACK_ALLOC(sp, sizeof(uint64_t)) = argc;
   free(copy);
 #undef STACK_ALLOC
-  regs.rsp = sp - (char*) vm->mem;
-  if(ioctl(vm->vcpufd, KVM_SET_REGS, &regs) < 0) pexit("ioctl(KVM_SET_REGS)");
+  regs.rsp = sp - (char *)vm->mem;
+  if (ioctl(vm->vcpufd, KVM_SET_REGS, &regs) < 0)
+    pexit("ioctl(KVM_SET_REGS)");
 }
 
-int main(int argc, char *argv[]) {
-  if(argc < 3) {
+int main(int argc, char *argv[])
+{
+
+  if (argc < 3)
+  {
     printf("Usage: %s kernel.bin user.elf [user_args...]\n", argv[0]);
     exit(EXIT_FAILURE);
   }
-  uint8_t *code;
-  size_t len;
-  //Load TDVF here
+  uint8_t *code,*code_kernel;
+  size_t len,len_kernel;
+  // Load TDVF here
   read_file(argv[1], &code, &len);
+  read_file(argv[2], &code_kernel, &len_kernel);
+
   /*if(len > MAX_KERNEL_SIZE)
     error("Kernel size exceeded, %p > MAX_KERNEL_SIZE(%p).\n",
       (void*) len,
       (void*) MAX_KERNEL_SIZE);*/
-  VM* vm = kvm_init(code, len);
-  copy_argv(vm, argc - 2, &argv[2]);
+  VM *vm = kvm_init(code, len, code_kernel,len_kernel);
+  //copy_argv(vm, argc - 2, &argv[2]);
   execute(vm);
 }
 
-int get_tdx_capabilities(int vmfd,struct kvm_tdx_capabilities *caps){
-  int r,nr_cpuid_configs;
-  nr_cpuid_configs = 6;//Tdx first generation;
-  struct kvm_tdx_cmd cmd;
-  memset(&cmd,0x0,sizeof(cmd));
-  cmd.id=KVM_TDX_CAPABILITIES;
-  cmd.data = caps;
-  do{
-    int size = sizeof(struct kvm_tdx_capabilities) +
-              nr_cpuid_configs * sizeof(struct kvm_tdx_cpuid_config);
-    caps = (struct kvm_tdx_capabilities * )malloc(size);
-    memset(caps,0x0,size);
-    r = ioctl(vmfd,KVM_MEMORY_ENCRYPT_OP,cmd);
-    caps->nr_cpuid_configs = nr_cpuid_configs;
-    if(r == -E2BIG){
-      free(caps);
-      nr_cpuid_configs *= 2;
-    }
-  }while(r==-E2BIG);
-  if(r) free(caps);
-  return r;
-}
-
-int set_kvm_max_vcpu(int vmfd, int max_vcpu){
-  struct kvm_enable_cap enabled_cap;
-  memset(&enabled_cap,0x0,sizeof(enabled_cap));
-  enabled_cap.cap=KVM_CAP_MAX_VCPUS;
-  enabled_cap.args[0] = max_vcpu;
-  int r =ioctl(vmfd,KVM_ENABLE_CAP,enabled_cap);
-  return r;
-}
-
-int initialize_tdx_vm(int vmfd,struct kvm_tdx_init_vm *vm_paras){
-  struct kvm_tdx_cmd cmd;
-  memset(&cmd,0x0,sizeof(cmd));
-  cmd.id = KVM_TDX_INIT_VM;
-  cmd.data = vm_paras;
-  int r = ioctl(vmfd,KVM_MEMORY_ENCRYPT_OP,cmd);
-  return r;
-}
-
-int tdx_vcpu_init(int vcpufd, __u64 vcpu_rcx){
-  struct kvm_tdx_cmd cmd;
-  memset(&cmd,0x0,sizeof(cmd));
-  cmd.id=KVM_TDX_INIT_VCPU;
-  cmd.data = vcpu_rcx;
-  int r = ioctl(vcpufd,KVM_MEMORY_ENCRYPT_OP,cmd);
-  return r;
-}
-
-//should be written in asm to get host cpuid and update it based on caps, todo
-struct kvm_cpuid2 get_tdx_cpuid(){
-  struct kvm_cpuid2 cpuid;
-  return cpuid;
-}
-
-int enalbe_x2apic(int vcpufd){
-  struct kvm_cpuid2 cpuid = get_tdx_cpuid();
-  cpuid.entries[0x1].ecx |= BIT(X2APIC);
-  int r = ioctl(vcpufd, KVM_SET_CPUID2, cpuid);
-  return r;
-}
-
-
-//todo, gpa should parsed from metadata of tdvf
-int encrypt_tdx_memory(int vcpufd, void* mem,int len){
-  struct kvm_tdx_init_mem_region mem_region = {
-            .source_addr = (__u64)mem,
-            .gpa = 0,
-            .nr_pages = (__u64)len / 4096,
-        };
-  struct kvm_tdx_cmd cmd;
-  memset(&cmd,0x0,sizeof(cmd));
-  cmd.id=KVM_TDX_INIT_VCPU;
-  cmd.data = &mem_region;
-  cmd.flags = KVM_TDX_MEASURE_MEMORY_REGION;
-  int r = ioctl(vcpufd,KVM_MEMORY_ENCRYPT_OP,cmd);
-  return r;
-}
-
-int finalize_td(int vmfd){
-  struct kvm_tdx_cmd cmd;
-  memset(&cmd,0x0,sizeof(cmd));
-  cmd.id=KVM_TDX_FINALIZE_VM;
-  int r = ioctl(vmfd,KVM_MEMORY_ENCRYPT_OP,cmd);
-  return r;
-}

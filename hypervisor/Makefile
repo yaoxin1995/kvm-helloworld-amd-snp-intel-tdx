@@ -1,7 +1,10 @@
 TARGET := hypervisor.elf
-SRCS := hypervisor.c hypercall.c
+SRCS := hypervisor.c hypercall.c pc_sysfw_ovmf.c tdvf.c tdvf-hob.c uuid.c
 DEPS := definition.h debug.h
 CFLAGS := -Wall
+PKGS=glib-2.0
+CFLAGS+=$(shell pkg-config --cflags $(PKGS))
+LDFLAGS+=$(shell pkg-config --libs $(PKGS))
 
 ifdef KVM_DEBUG
 CFLAGS += -DDEBUG
@@ -10,7 +13,7 @@ endif
 all: $(TARGET)
 
 $(TARGET): $(SRCS) $(DEPS)
-	$(CC) $^ $(CFLAGS) -o $@
+	$(CC) $^ $(CFLAGS) -o $@ $(LIBS) $(LDFLAGS)
 
 debug:
 	$(MAKE) KVM_DEBUG=1
