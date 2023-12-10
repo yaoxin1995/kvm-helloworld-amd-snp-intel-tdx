@@ -55,7 +55,6 @@ void switch_user(uint64_t argc, char *argv[]) {
   char *s = kmalloc(total_len, MALLOC_PAGE_ALIGN);
   uint64_t sp = physical(s);
   add_trans_user((void*) sp, (void*) sp, PROT_RW,true); /* sp is page aligned */
-
   /* copy strings and argv onto user-accessible area */
   for(int i = 0; i < argc; i++){
     argv[i] = (char*) (argv[i] - (char*) argv + sp);
@@ -104,6 +103,7 @@ void get_tdx_report(){
 }
 
 int kernel_main_sev_snp(uint64_t hob, uint64_t _payload) {
+  unsigned char buffer[20] = {0};
   for(uint64_t i=KERNEL_BASE_OFFSET;i<(0x7ddde000|KERNEL_BASE_OFFSET);i+=0x1000){
     pvalidate(i, Size4K, true);
   }
@@ -116,6 +116,16 @@ int kernel_main_sev_snp(uint64_t hob, uint64_t _payload) {
 
   write_in_console("Start setting up dma.\n");
   uint64_t dma = get_usable(DMA_SIZE);
+  write_in_console("dma address:0x");
+  uint64_to_string(dma,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
+
+  write_in_console("dma size:0x");
+  uint64_to_string(DMA_SIZE,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
+
   ghcb_block_make_pages_shared(dma | KERNEL_BASE_OFFSET,DMA_SIZE/0x1000);
   init_allocator_shared((void*)( dma | KERNEL_BASE_OFFSET), DMA_SIZE);
   memset((void*)( dma | KERNEL_BASE_OFFSET),0x0,DMA_SIZE);

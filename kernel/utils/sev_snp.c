@@ -154,6 +154,15 @@ void invalidate(){
 
 
 void __ghcb_block_make_pages_shared(uint64_t vaddr, uint64_t npages){
+    unsigned char buffer[20] = {0};
+    write_in_console("__ghcb_block_make_pages_shared vaddr address:0x");
+    uint64_to_string(vaddr,buffer);
+    write_in_console((char*)buffer);
+    write_in_console("  npages:0x");
+    uint64_to_string(npages,buffer);
+    write_in_console((char*)buffer);
+    write_in_console("\n");
+
     for(int i=0;i<npages;i++){
          pvalidate(vaddr+i*PAGE_SIZE, Size4K, false);
     }
@@ -186,8 +195,8 @@ void ghcb_block_make_pages_shared(uint64_t vaddr, uint64_t npages){
     if(npages==0)
         return;
     int count = npages/VMGEXIT_PSC_MAX_ENTRY;
-    for(int i=0;i<count;i++){
-         __ghcb_block_make_pages_shared(vaddr+VMGEXIT_PSC_MAX_ENTRY*PAGE_SIZE*count,(npages>=VMGEXIT_PSC_MAX_ENTRY ? VMGEXIT_PSC_MAX_ENTRY:npages));
+    for(int i=0;i<count+1;i++){
+         __ghcb_block_make_pages_shared(vaddr+VMGEXIT_PSC_MAX_ENTRY*PAGE_SIZE*i,(npages>=VMGEXIT_PSC_MAX_ENTRY ? VMGEXIT_PSC_MAX_ENTRY:npages));
          npages-=VMGEXIT_PSC_MAX_ENTRY;
     }
 }

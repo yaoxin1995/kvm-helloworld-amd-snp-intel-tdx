@@ -594,6 +594,7 @@ void vc_handle_ioio(uint64_t exit_info_1,struct InterruptErrorStack * stack, boo
 
 
 void __attribute__((ms_abi))vmm_communication_exception_inner(struct InterruptErrorStack * stack){
+    asm("hlt");
     invalidate();
     switch (stack->code)
     {

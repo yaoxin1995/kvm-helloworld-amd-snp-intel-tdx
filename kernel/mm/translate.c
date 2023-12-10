@@ -109,7 +109,10 @@ uint64_t translate(void *vaddr, int usermode, int writable) {
     return (pd[PDOFF(vaddr)] & -0x200000) + ((uint64_t) vaddr & 0x1fffff);
   PAGING(&pt[PTOFF(vaddr)], ret);
 #undef PAGING
-    return (physical(ret) + ((uint64_t) vaddr & 0xfff));
+    if(pt[PTOFF(vaddr)]& c_bit_mask)
+      return (c_bit_mask|(physical(ret) + ((uint64_t) vaddr & 0xfff)));
+    else
+      return (physical(ret) + ((uint64_t) vaddr & 0xfff));
 }
 
 /* vaddr should always an address of kernel-space */
