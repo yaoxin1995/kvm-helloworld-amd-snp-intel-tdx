@@ -1,5 +1,5 @@
 .globl hlt, init_kernel_page_tables, pml4
-.extern kernel_main_tdx
+.extern kernel_main_sev_snp
 .extern init_kernel_page_tables
 .extern pml4
 .intel_syntax noprefix
@@ -11,8 +11,8 @@ _start:
 #  preserve arguments from hob
 #  calling convention is amd_64
 
-  pushq rdi; #arg0
-  pushq rsi; #arg1
+#  pushq rdi; #arg0
+#  pushq rsi; #arg1
 #  stack should be 16 byte aligned
    lea rax, [rip + init_kernel_page_tables]
    callq rax;
@@ -22,7 +22,7 @@ _start:
    mov cr3, rax
 # enable cache
 # all is good. now go to the kernel start
-  lea rax, [rip + kernel_main_tdx]
+  lea rax, [rip + kernel_main_sev_snp]
   callq rax;
 
 hlt:

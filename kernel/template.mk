@@ -3,7 +3,7 @@ SSRCS	:= $(wildcard *.s) $(wildcard *.asm)
 OBJS	:= $(SSRCS:.s=.o) $(CSRCS:.c=.o) $(SSRCS:.asm=.o)
 DEPS	:= $(CSRCS:.c=.d)
 
-CFLAGS := -nostdlib -Os -Wall -Werror -fPIE -pie -m64 -masm=intel -I.. -mcmodel=small -static-pie
+CFLAGS := -nostdlib -Os -Wall -Wno-address-of-packed-member -Werror -fPIE -pie -m64 -masm=intel -I.. -mcmodel=small -static-pie
 
 all: $(TARGET)
 

@@ -9,6 +9,4 @@
 
 uint64_t get_usable(uint64_t size);
 
-
-
 #endif

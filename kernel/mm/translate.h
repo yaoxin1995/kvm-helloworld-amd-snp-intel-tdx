@@ -41,7 +41,7 @@ void add_trans_user(void* vaddr, void* paddr, int prot);
 int modify_permission(void *vaddr, int prot);
 int pf_to_prot(Elf64_Word pf);
 
-int set_shared_bit(uint64_t *vaddr, uint64_t len);
-int clear_shared_bit(uint64_t *vaddr, uint64_t len);
+int set_c_bit(uint64_t *vaddr, uint64_t len);
+int clear_c_bit(uint64_t *vaddr, uint64_t len);
 
 #endif

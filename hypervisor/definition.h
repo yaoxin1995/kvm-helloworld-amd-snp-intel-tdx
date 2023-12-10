@@ -16,8 +16,9 @@ typedef struct VM {
   /* Only supports one vCPU */
   int vcpufd;
   int vmfd;
+  int region_num;
   struct kvm_run *run;
-  memory_region regions[];
+  struct kvm_userspace_memory_region2 **regions;
 } VM;
 
 /* Common macros */

@@ -4,6 +4,7 @@
 #include <mm/kframe.h>
 #include <utils/string.h>
 #include <utils/tdx.h>
+#include <utils/sev_snp.h>
 
 
 static inline uint64_t* get_pml4_addr() {
@@ -109,9 +110,9 @@ int pf_to_prot(Elf64_Word pf) {
   return ret;
 }
 
-int set_shared_bit(uint64_t *vaddr, uint64_t len){
-  if((uint64_t)vaddr & 0xfff) panic("set_shared_bit:vaddr should aligned with page size 4KB");
-  if((uint64_t)len & 0xfff) panic("set_shared_bit:len should aligned with page size 4KB");
+int set_c_bit(uint64_t *vaddr, uint64_t len){
+  if((uint64_t)vaddr & 0xfff) panic("set_c_bit:vaddr should aligned with page size 4KB");
+  if((uint64_t)len & 0xfff) panic("set_c_bit:len should aligned with page size 4KB");
   uint64_t *pml4 = get_pml4_addr(), *pdp, *pd, *pt;
   uint64_t vaddr_end = (uint64_t)vaddr+len;
   for(uint64_t i=(uint64_t)vaddr;i<vaddr_end;i+=PAGE_SIZE){
@@ -123,12 +124,17 @@ int set_shared_bit(uint64_t *vaddr, uint64_t len){
       PAGING(&pdp[PDPOFF((uint64_t*)i)], pd);
       PAGING(&pd[PDOFF((uint64_t*)i)], pt);
     #undef PAGING
-    pt[PTOFF((uint64_t*)i)]|=SHARED_BIT;
+    int c_bit = get_cbit();
+    if(c_bit ==0){
+      panic("invalid c_bit!\n");
+    }
+    uint64_t c_bit_mask = 1<<c_bit;
+    pt[PTOFF((uint64_t*)i)]|=c_bit_mask;
   }
   return 0;
 }
 
-int clear_shared_bit(uint64_t *vaddr, uint64_t len){
+int clear_c_bit(uint64_t *vaddr, uint64_t len){
   if((uint64_t)vaddr & 0xfff) panic("vaddr should aligned with page size 4KB");
   uint64_t *pml4 = get_pml4_addr(), *pdp, *pd, *pt;
   uint64_t vaddr_end = (uint64_t)vaddr+len;
@@ -141,7 +147,12 @@ int clear_shared_bit(uint64_t *vaddr, uint64_t len){
       PAGING(&pdp[PDPOFF((uint64_t*)i)], pd);
       PAGING(&pd[PDOFF((uint64_t*)i)], pt);
     #undef PAGING
-    pt[PTOFF((uint64_t*)i)] &= (SHARED_BIT-1);
+    int c_bit = get_cbit();
+    if(c_bit ==0){
+      panic("invalid c_bit!\n");
+    }
+    uint64_t c_bit_mask = 1<<c_bit;
+    pt[PTOFF((uint64_t*)i)] &= (c_bit_mask-1);
   }
   return 0;
 }

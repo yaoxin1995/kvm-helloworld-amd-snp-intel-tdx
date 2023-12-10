@@ -13,7 +13,6 @@
 #include <utils/errno.h>
 #include <utils/misc.h>
 #include <utils/string.h>
-#include <utils/tdx.h>
 
 static int load_binary(int fd, process* p) {
   void *buf = smalloc(0x1000, MALLOC_NO_ALIGN);
@@ -129,19 +128,6 @@ static int create_elf_info(process *p, char *const argv[], char *const envp[]) {
   return 0;
 }
 
-uint64_t read_msr(uint32_t msr_id) {
-    uint32_t low, high;
-    uint64_t result;
-
-    asm volatile (
-        "rdmsr"
-        : "=a" (low), "=d" (high)
-        : "c" (msr_id)
-    );
-
-    result = ((uint64_t)high << 32) | low;
-    return result;
-}
 
 /* can only be used in kernel_main */
 int sys_execve(const char *path, char *const argv[], char *const envp[]) {
@@ -188,29 +174,7 @@ int sys_execve(const char *path, char *const argv[], char *const envp[]) {
   }
 
   write_in_console("\n");
-
-  uint64_t msr_efer = tdvmcall_rdmsr(0xC0000080);
-  write_in_console("msr_efer:0x");
-  uint64_to_string(msr_efer,buffer);
-  write_in_console((char*)buffer);
-  write_in_console("\n");
-
-  uint64_t msr_lstar = read_msr(0xC0000082);
-  //uint64_t msr_lstar = tdvmcall_rdmsr(0xC0000082);
-  write_in_console("msr_lstar:0x");
-  uint64_to_string(msr_lstar,buffer);
-  write_in_console((char*)buffer);
-  write_in_console("\n");
-
-  uint64_t msr_star = read_msr(0xC0000081);
-  //uint64_t msr_star = tdvmcall_rdmsr(0xC0000081);
-  write_in_console("msr_star:0x");
-  uint64_to_string(msr_star,buffer);
-  write_in_console((char*)buffer);
-  write_in_console("\n");
   
-  
-
   
 
   asm volatile(

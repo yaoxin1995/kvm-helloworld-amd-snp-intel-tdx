@@ -4,7 +4,7 @@
 #include <utils/panic.h>
 #include <utils/tdx.h>
 #include <utils/string.h>
-
+#include <utils/sev_snp.h>
 
 #define EXIT_REASON_CPUID 10
 #define EXIT_REASON_HLT 12

@@ -1,6 +1,6 @@
 TARGET := hypervisor.elf
-SRCS := hypervisor.c hypercall.c pc_sysfw_ovmf.c tdvf.c tdvf-hob.c uuid.c e820_memory_layout.c
-DEPS := definition.h debug.h e820_memory_layout.h
+SRCS := hypervisor.c hypercall.c 
+DEPS := definition.h debug.h 
 CFLAGS := -Wall
 PKGS=glib-2.0
 CFLAGS+=$(shell pkg-config --cflags $(PKGS))

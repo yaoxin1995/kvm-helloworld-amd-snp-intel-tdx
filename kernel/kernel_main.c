@@ -10,6 +10,7 @@
 #include <mm/gdt.h>
 #include <mm/idt.h>
 #include <utils/panic.h>
+#include <utils/sev_snp.h>
 #include "../../.parameters"
 
 #define MSR_STAR 0xc0000081 /* legacy mode SYSCALL target */
@@ -81,24 +82,43 @@ void enable_apic_interrupt() {
     tdvmcall_wrmsr(0x80f, svr | (0x1 << 8));
 }
 
-int kernel_test(uint64_t hob, uint64_t _payload){
-  tdvmcall_io_write_8(0x3f8,'s');
-  return 0;
-}
-int kernel_main_tdx(uint64_t hob, uint64_t _payload) {
 
+
+void get_tdx_report(){
   unsigned char buffer[20] = {0};
-  
-  write_in_console("Setting up page table finished.\n");
+  void* report_buffer = kmalloc(PAGE_SIZE,MALLOC_PAGE_ALIGN);
+  uint8_t additional_data[64]={0};
+  uint64_t report_ret = tdcall_report((uint64_t )report_buffer&~KERNEL_BASE_OFFSET,additional_data);
+  struct TdxReport tdx_report;
+  if(report_ret){
+    uint64_to_string(report_ret,buffer);
+    write_in_console("Get report error! error code:0x");
+    write_in_console((char*)buffer);
+    write_in_console("\n");
+  }else{
+    tdx_report = *(struct TdxReport*)report_buffer;
+    dump_tdx_report(&tdx_report);
+  }
+}
 
+int kernel_main_sev_snp(uint64_t hob, uint64_t _payload) {  
+  uint64_t ghcb = get_usable(PAGE_SIZE);
+  ghcb_init(ghcb| KERNEL_BASE_OFFSET);
+  write_in_console("Succeeded in initializing GHCB\n");
+  //stack initialization
+  write_in_console("Start setting up stack and jump to new stack.\n");
+  uint64_t stack = get_usable(STACK_SIZE)|KERNEL_BASE_OFFSET;
+  uint64_t stack_top = stack + STACK_SIZE;
+  asm("mov rsp, %0;"
+    "mov rbp, rsp;"
+      ::"r"(stack_top));
   write_in_console("Start setting up heap.\n");
   uint64_t heap = get_usable(HEAP_SIZE);
   init_allocator((void*) ( heap | KERNEL_BASE_OFFSET), HEAP_SIZE);
 
   write_in_console("Start setting up dma.\n");
   uint64_t dma = get_usable(DMA_SIZE);
-  set_shared_bit((uint64_t*)(dma | KERNEL_BASE_OFFSET),DMA_SIZE);
-  tdvmcall_mapgpa(true,dma,DMA_SIZE);
+  ghcb_block_make_pages_shared(dma | KERNEL_BASE_OFFSET,DMA_SIZE/0x1000);
   init_allocator_shared((void*)( dma | KERNEL_BASE_OFFSET), DMA_SIZE);
   memset((void*)( dma | KERNEL_BASE_OFFSET),0x0,DMA_SIZE);
   write_in_console("Start setting gdt.\n");
@@ -113,31 +133,11 @@ int kernel_main_tdx(uint64_t hob, uint64_t _payload) {
   memset(idt,0x0,PAGE_SIZE);
   idt_init(idt);
   write_in_console("Start enabling apic interrupt.\n");
-  enable_apic_interrupt();
-  void* report_buffer = kmalloc(PAGE_SIZE,MALLOC_PAGE_ALIGN);
-  uint8_t additional_data[64]={0};
-  uint64_t report_ret = tdcall_report((uint64_t )report_buffer&~KERNEL_BASE_OFFSET,additional_data);
-  struct TdxReport tdx_report;
-  if(report_ret){
-    uint64_to_string(report_ret,buffer);
-    write_in_console("Get report error! error code:0x");
-    write_in_console((char*)buffer);
-    write_in_console("\n");
-  }else{
-    tdx_report = *(struct TdxReport*)report_buffer;
-    dump_tdx_report(&tdx_report);
-  }
-
-
+  //enable_apic_interrupt(); // for tdx requirement
+  get_tdx_report();
   if(register_syscall() != 0) return 1;
-  //write_in_console("Start setting up stack and jump to new stack.\n");
-  //stack initialization
-  //uint64_t stack = get_usable(STACK_SIZE)|KERNEL_BASE_OFFSET;
-  //uint64_t stack_top = stack + STACK_SIZE;
+  
 
-  /*asm("mov rsp, %0;"
-      "mov rbp, rsp;"
-       ::"r"(stack_top));*/
   int parameters_argc = ARGC+1;
   int parameters_argv_len = ARGV_LEN;
   char* parameters = PARAMETERS;

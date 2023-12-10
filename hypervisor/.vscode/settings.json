@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "stdlib.h": "c",
+        "ioctl.h": "c",
+        "fcntl.h": "c",
+        "eventfd.h": "c",
+        "kvm.h": "c",
+        "hypercall.h": "c",
+        "elf.h": "c"
+    }
+}

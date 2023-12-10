@@ -1,4 +1,6 @@
 #include <mm/idt.h>
+#include <mm/translate.h>
+#include <utils/sev_snp.h>
 static unsigned char uint64_buffer[20] = {0};
 
 void dump_register(char * name, uint64_t value, unsigned char* string){
@@ -367,6 +369,297 @@ void __attribute__((ms_abi))virtualization_inner(struct InterruptNoErrorStack * 
 }
 
 
+
+
+
+void vc_ioio_exitinfo(uint64_t *exitinfo, struct InterruptErrorStack * stack)
+{   
+    uint8_t* rip = (uint8_t*)stack->iret.rip;
+	*exitinfo = 0;
+    uint8_t* opcode;
+    int opnd_bytes = 4;
+    int addr_bytes = 8;
+    bool insn_has_rep_prefix = false;
+    for(int i=0;i<4;i++){
+        bool found = false;
+        switch (*(rip+i))
+        {
+        case 0xf2:
+        case 0xf3:
+        //rep prefix
+            insn_has_rep_prefix = true;
+            found = true;
+            break;
+        case 0x2e:
+        case 0x36:
+        case 0x3e:
+        case 0x26:
+        case 0x64:
+        case 0x65:
+        //segment prefix
+            found = true;
+        case 0x66:
+        //operand byte prefix
+            opnd_bytes ^= 6;
+            found = true;
+        case 0x67:
+        //addr_bytes prefix
+            addr_bytes ^= 12;
+            found = true;
+        default:
+            break;
+        }
+        if(!found){
+            opcode = rip+i;
+            break;
+        }
+        opcode = rip+i+1;
+    }
+    if(*rip == 0x66){}
+	switch (*opcode) {
+	/* INS opcodes */
+	case 0x6c:
+	case 0x6d:
+		*exitinfo |= IOIO_TYPE_INS;
+		*exitinfo |= IOIO_SEG_ES;
+		*exitinfo |= (stack->scratch.rdx & 0xffff) << 16;
+		break;
+
+	/* OUTS opcodes */
+	case 0x6e:
+	case 0x6f:
+		*exitinfo |= IOIO_TYPE_OUTS;
+		*exitinfo |= IOIO_SEG_DS;
+		*exitinfo |= (stack->scratch.rdx & 0xffff) << 16;
+		break;
+
+	/* IN immediate opcodes */
+	case 0xe4:
+	case 0xe5:
+		*exitinfo |= IOIO_TYPE_IN;
+		*exitinfo |= opcode[1] << 16;
+		break;
+
+	/* OUT immediate opcodes */
+	case 0xe6:
+	case 0xe7:
+		*exitinfo |= IOIO_TYPE_OUT;
+		*exitinfo |= opcode[1] << 16;
+		break;
+
+	/* IN register opcodes */
+	case 0xec:
+	case 0xed:
+		*exitinfo |= IOIO_TYPE_IN;
+		*exitinfo |= (stack->scratch.rdx & 0xffff) << 16;
+		break;
+
+	/* OUT register opcodes */
+	case 0xee:
+	case 0xef:
+		*exitinfo |= IOIO_TYPE_OUT;
+		*exitinfo |= (stack->scratch.rdx & 0xffff) << 16;
+		break;
+
+	default:
+		return;
+	}
+
+	switch (*opcode) {
+	case 0x6c:
+	case 0x6e:
+	case 0xe4:
+	case 0xe6:
+	case 0xec:
+	case 0xee:
+		/* Single byte opcodes */
+		*exitinfo |= IOIO_DATA_8;
+		break;
+	default:
+		/* Length determined by instruction parsing */
+		*exitinfo |= (opnd_bytes == 2) ? IOIO_DATA_16
+						     : IOIO_DATA_32;
+	}
+	switch (addr_bytes) {
+	case 2:
+		*exitinfo |= IOIO_ADDR_16;
+		break;
+	case 4:
+		*exitinfo |= IOIO_ADDR_32;
+		break;
+	case 8:
+		*exitinfo |= IOIO_ADDR_64;
+		break;
+	}
+
+	if (insn_has_rep_prefix)
+		*exitinfo |= IOIO_REP;
+}
+
+
+void vc_handle_ioio(uint64_t exit_info_1,struct InterruptErrorStack * stack, bool *need_retry){
+    uint64_t exit_info_2;
+    #define MIN(a, b) ((a) < (b) ? (a) : (b))
+    if (exit_info_1 & IOIO_TYPE_STR) {
+
+		/* (REP) INS/OUTS */
+
+		bool df = ((stack->iret.rflags & X86_EFLAGS_DF) == X86_EFLAGS_DF);
+		unsigned int io_bytes, exit_bytes;
+		unsigned int ghcb_count, op_count;
+
+		/*
+		 * For the string variants with rep prefix the amount of in/out
+		 * operations per #VC exception is limited so that the kernel
+		 * has a chance to take interrupts and re-schedule while the
+		 * instruction is emulated.
+		 */
+		io_bytes   = (exit_info_1 >> 4) & 0x7;
+		ghcb_count = sizeof(ghcb->shared_buffer) / io_bytes;
+
+		op_count    = (exit_info_1 & IOIO_REP) ? stack->scratch.rcx: 1;
+		exit_info_2 = MIN(op_count, ghcb_count);
+		exit_bytes  = exit_info_2 * io_bytes;
+
+		/* Read bytes of OUTS into the shared buffer */
+		if (!(exit_info_1 & IOIO_TYPE_IN)) {
+            int b = df ? - 1 : 1;
+            for(int i=0;i<exit_info_2;i++){
+                void *s = (void *)(stack->scratch.rsi + (i * io_bytes * b));
+		        char *d = (char *)(ghcb->shared_buffer + (i * io_bytes));
+                memcpy(d,s,io_bytes);
+            }
+		}
+
+		/*
+		 * Issue an VMGEXIT to the HV to consume the bytes from the
+		 * shared buffer or to have it write them into the shared buffer
+		 * depending on the instruction: OUTS or INS.
+		 */
+		ghcb->save.sw_scratch = (uint64_t)physical(ghcb->shared_buffer);
+        set_offset_valid(&ghcb->save.sw_scratch);
+        if(vmgexit(SVM_EXIT_IOIO,exit_info_1,exit_info_2)<0){
+            panic("vc_handle_ioio for ins/outs vmgexit error!");
+        };
+
+		/* Read bytes from shared buffer into the guest's destination. */
+		if (exit_info_1 & IOIO_TYPE_IN) {
+			int b = df ? - 1 : 1;
+            for(int i=0;i<exit_info_2;i++){
+                void *d =  (void *)(stack->scratch.rsi + (i * io_bytes * b));
+		        char *b = (char *)(ghcb->shared_buffer + (i * io_bytes));
+                memcpy(d,b,io_bytes);
+            }
+
+			if (df)
+				stack->scratch.rdi -= exit_bytes;
+			else
+				stack->scratch.rdi += exit_bytes;
+		} else {
+			if (df)
+				stack->scratch.rsi -= exit_bytes;
+			else
+				stack->scratch.rsi += exit_bytes;
+		}
+
+		if (exit_info_1 & IOIO_REP)
+			stack->scratch.rcx -= exit_info_2;
+        if(stack->scratch.rcx)
+            *need_retry = true;
+	} else {
+
+		/* IN/OUT into/from rAX */
+
+		int bits = (exit_info_1 & 0x70) >> 1;
+		uint64_t rax = 0;
+
+		if (!(exit_info_1 & IOIO_TYPE_IN))
+			rax = lower_bits(stack->scratch.rax, bits);
+
+		ghcb->save.rax = rax;
+        set_offset_valid(&ghcb->save.rax);
+
+        if(vmgexit(SVM_EXIT_IOIO,exit_info_1,0)<0){
+            panic("vc_handle_ioio for in/out vmgexit error!");
+        };
+
+		if (exit_info_1 & IOIO_TYPE_IN) {
+			if (!test_offset_valid(&ghcb->save.rax))
+				panic("vc_handle_ioio for in/out vmgexit vmm return set bitmap error!");
+			stack->scratch.rax = lower_bits(ghcb->save.rax, bits);
+		}
+	}
+
+}
+
+
+void __attribute__((ms_abi))vmm_communication_exception_inner(struct InterruptErrorStack * stack){
+    invalidate();
+    switch (stack->code)
+    {
+    case SVM_EXIT_CPUID:{
+        if(*(uint16_t *)(stack->iret.rip) != 0xa20f)
+            panic("Wrong opcode for cpuid!");
+        SnpCpuidInfo* cpuid_page = (SnpCpuidInfo*)CPUID_PAGE;
+        for(int i = 0; i < cpuid_page->count ; i++){
+            if(cpuid_page->entries[i].eax_in==(uint32_t)stack->scratch.rax&&cpuid_page->entries[i].ecx_in==(uint32_t)stack->scratch.rcx){
+                stack->scratch.rax = cpuid_page->entries[i].eax;
+                stack->preserved.rbx = cpuid_page->entries[i].ebx;
+                stack->scratch.rcx = cpuid_page->entries[i].ecx;
+                stack->scratch.rdx = cpuid_page->entries[i].edx;
+                stack->iret.rip += 2;
+                break;
+            }
+        }
+    }
+        break;
+    case SVM_EXIT_IOIO:{
+        uint64_t exit_info_1;
+        bool need_retry = false;
+        vc_ioio_exitinfo(&exit_info_1,stack);
+        vc_handle_ioio(exit_info_1,stack,&need_retry);
+        if(!need_retry)
+            stack->iret.rip += 2;
+    }
+        break;
+    case SVM_EXIT_MSR:{
+        uint64_t exit_info_1;
+        uint8_t* opcode = (uint8_t*)stack->iret.rip;
+        /* Is it a WRMSR? */
+        exit_info_1 = (opcode[1] == 0x30) ? 1 : 0;
+        ghcb->save.rcx = stack->scratch.rcx;
+        set_offset_valid(&ghcb->save.rcx);
+        if (exit_info_1) {
+            ghcb->save.rax = stack->scratch.rax;
+            set_offset_valid(&ghcb->save.rax);
+            ghcb->save.rdx = stack->scratch.rdx;
+            set_offset_valid(&ghcb->save.rdx);
+        }
+        if(vmgexit(SVM_EXIT_MSR,exit_info_1,0)<0){
+            panic("SVM_EXIT_MSR vmgexit error!");
+        };
+
+        if (!exit_info_1) {
+            stack->scratch.rax = ghcb->save.rax;
+            stack->scratch.rdx = ghcb->save.rdx;
+        }
+
+
+    }
+        break;
+    case SVM_EXIT_WBINVD:
+    case SVM_EXIT_MONITOR:
+    case SVM_EXIT_MWAIT:
+    case SVM_EXIT_VMMCALL:
+    case SVM_EXIT_RDPMC:
+        dump_error(stack);
+        write_in_console("Unsupported #VC exit reason\n");
+        panic("Virtualization fault");
+    default:
+        break;
+    }
+}
+
 INTERRUPT_NO_ERROR(default_exception,default_exception_inner)
 INTERRUPT_NO_ERROR(default_interrupt,default_interrupt_inner)
 INTERRUPT_NO_ERROR(divide_by_zero,divide_by_zero_inner)
@@ -389,6 +682,8 @@ INTERRUPT_ERROR(machine_check,machine_check_inner)
 INTERRUPT_ERROR(simd,simd_inner)
 INTERRUPT_ERROR(control_flow,control_flow_inner)
 INTERRUPT_NO_ERROR(virtualization,virtualization_inner)
+INTERRUPT_ERROR(vmm_communication_exception,vmm_communication_exception_inner)
+
 
 void set_flags(struct idt_entry * entry, uint8_t flags){
     entry->attribute = flags;
@@ -456,9 +751,11 @@ void idt_init(struct idt_entry* allocated_idt){
     set_func(&idt[19],simd);
     set_func(&idt[20],virtualization);
     set_func(&idt[21],control_flow);
+    set_func(&idt[29],vmm_communication_exception);
 
     for(int i=22;i<32;i++){
-        set_func(&idt[i],default_exception);
+        if(i != 29)
+            set_func(&idt[i],default_exception);
     }
 
     for(int i=32;i<IDT_ENTRY_COUNT;i++){
