@@ -143,6 +143,24 @@ struct DescriptorTablePointer {
 #define INTERRUPT_ERROR(name,  func) \
     INTERRUPT_COMMON(name, func,"add rsp, 8;\n\t iretq;")
 
+#define INTERRUPT_TEST(name, func, asm_epilogue) \
+    __attribute__((naked))void name() { \
+        panic("error");\
+        asm(\
+            SCRATCH_PUSH() \
+            PRESERVED_PUSH() \
+            "mov rcx, rsp;" \
+            "mov rbx, rsp;"\
+            "and rsp,(~(0x40-1));"\
+            "lea rax, %a0;" \
+            "call rax;" \
+            "mov rsp, rbx;"\
+            PRESERVED_POP() \
+            SCRATCH_POP() \
+            asm_epilogue \
+            :: "p" (func) \
+            ); \
+    };
 
 
 #define PRESENT  1 << 7
@@ -156,5 +174,6 @@ struct DescriptorTablePointer {
 
 static struct idt_entry* idt;
 void idt_init(struct idt_entry* allocated_idt);
+void idt_test(struct idt_entry* allocated_idt);
 #endif
 

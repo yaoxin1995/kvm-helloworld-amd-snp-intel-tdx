@@ -697,7 +697,7 @@ INTERRUPT_ERROR(simd,simd_inner)
 INTERRUPT_ERROR(control_flow,control_flow_inner)
 INTERRUPT_NO_ERROR(virtualization,virtualization_inner)
 INTERRUPT_ERROR(vmm_communication_exception,vmm_communication_exception_inner)
-
+INTERRUPT_TEST(default_exception_test,default_exception_inner,"iretq")
 
 void set_flags(struct idt_entry * entry, uint8_t flags){
     entry->attribute = flags;
@@ -739,6 +739,13 @@ void load_idtr(){
         :
         : "m" (idtr)
     );
+}
+void idt_test(struct idt_entry* allocated_idt){
+    idt =allocated_idt;
+    for(int i=0;i<32;i++){
+    set_func(&idt[i],default_exception_test);
+    }
+    load_idtr();
 }
 
 void idt_init(struct idt_entry* allocated_idt){

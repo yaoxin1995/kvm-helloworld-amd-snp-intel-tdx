@@ -14,7 +14,8 @@
 #include <utils/misc.h>
 #include <utils/string.h>
 #include <utils/sev_snp.h>
-
+#include <utils/definition.h>
+//#include <mm/idt.h>
 static int load_binary(int fd, process* p) {
   void *buf = smalloc(0x1000, MALLOC_NO_ALIGN);
   hp_read(fd, physical(buf), 0x1000);
@@ -176,6 +177,30 @@ int sys_execve(const char *path, char *const argv[], char *const envp[]) {
 
   write_in_console("\n");
   
+  uint64_t cr0 = 0;
+  asm volatile(
+    "mov %0, cr0;"
+    :"=r"(cr0)
+    
+  );
+  write_in_console("cr0:0x");
+  uint64_to_string(cr0,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
+
+  uint64_t cr4 = 0;
+  asm volatile(
+    "mov %0, cr4;"
+    :"=r"(cr4)
+    
+  );
+  
+  write_in_console("cr4:0x");
+  uint64_to_string(cr4,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
+
+  
   uint64_t efer = read_msr(IA32_EFER);
   write_in_console("IA32_EFER:0x");
   uint64_to_string(efer,buffer);
@@ -213,6 +238,18 @@ int sys_execve(const char *path, char *const argv[], char *const envp[]) {
   write_in_console((char*)buffer);
   write_in_console("\n");
 
+  uint64_t S_CET  = read_msr(0x6A2);
+  write_in_console("S_CET:0x");
+  uint64_to_string(S_CET,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
+
+  uint64_t ssp_cpl0 = read_msr(0x6A4);
+  write_in_console("ssp_cpl0:0x");
+  uint64_to_string(ssp_cpl0,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
+
   uint64_t ssp_cpl3 = read_msr(0x6A7);
   write_in_console("ssp_cpl3:0x");
   uint64_to_string(ssp_cpl3,buffer);
@@ -231,6 +268,45 @@ int sys_execve(const char *path, char *const argv[], char *const envp[]) {
   write_in_console((char*)buffer);
   write_in_console("\n");
 
+  uint64_t phy_addr =  translate((void *)(p.entry + p.load_addr),1,1);
+  write_in_console("phy_addr:0x");
+  uint64_to_string(phy_addr,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
+/*
+  asm volatile(
+    "mov [rip + kernel_stack], rsp;"
+    "mov rax, 0x10;" //ss (0x28|0x3)
+    "push rax;"
+    "mov rax, %[rsp];" //rsp
+    "push rax;"
+    "mov rax, 0x2;" //rflag
+    "push rax;"
+    "mov rax, 0x8;" //cs 0x33
+    "push rax;"
+    "mov rax, %[entry];" //rip
+    "push rax;"
+    "xor rax, rax;"
+    "xor rbx, rbx;"
+    "xor rdx, rdx;"
+    "xor rdi, rdi;"
+    "xor rsi, rsi;"
+    "xor rbp, rbp;"
+    "xor r8, r8;"
+    "xor r9, r9;"
+    "xor r10, r10;"
+    "xor r12, r12;"
+    "xor r13, r13;"
+    "xor r14, r14;"
+    "xor r15, r15;"
+    "xor rbp, rbp;"
+    ".byte 0x48;"
+    "iretq"
+    :: [entry]"r"(p.entry + p.load_addr), [rsp]"r"(p.rsp)
+  );
+
+  idt = (struct idt_entry*)(0x5E8DF000|KERNEL_BASE_OFFSET);
+  idt_test(idt);*/
   asm volatile(
     "mov [rip + kernel_stack], rsp;"
     "mov rcx, %[entry];" /* rip */
