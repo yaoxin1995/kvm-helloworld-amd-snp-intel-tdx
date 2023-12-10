@@ -1,0 +1,28 @@
+[package]
+name = "sallyport"
+version = "0.7.1"
+edition = "2021"
+description = "API for the Enarx hypervisor-microkernel boundary"
+authors = ["The Enarx Project Developers"]
+repository = "https://github.com/enarx/enarx"
+license = "Apache-2.0"
+keywords = ["enarx", "syscall"]
+categories = ["no-std"]
+
+[features]
+doc = ["dep:gdbstub"]
+
+[dependencies]
+bitflags = { workspace = true }
+goblin = { workspace = true }
+
+# optional dependencies
+gdbstub = { workspace = true, optional = true }
+
+[dev-dependencies]
+libc = { workspace = true, features = ["extra_traits"] }
+serial_test = { workspace = true }
+testaso = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true

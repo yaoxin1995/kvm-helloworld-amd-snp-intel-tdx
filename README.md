@@ -79,3 +79,13 @@ $ hypervisor/hypervisor.elf kernel/kernel.bin user/orw.elf /etc/os-release
 ### Environment
 
 I only tested the code on Ubuntu 18.04, but I expect it to work on all KVM-supported x86 Linux distributions. Please file an issue if you find it's not true.
+
+### SEV-SNP Extension
+Make sure you have the rw root of /dev/sev.
+
+Use compile.sh script to compile the example code:
+./compile.sh example 
+
+Then run the code with:
+./hypervisor.elf ./enarx-shim-kvm ./kernel.bin 
+

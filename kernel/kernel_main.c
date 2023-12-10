@@ -11,7 +11,7 @@
 #include <mm/idt.h>
 #include <utils/panic.h>
 #include <utils/sev_snp.h>
-#include "../../.parameters"
+#include "../.parameters"
 
 #define MSR_STAR 0xc0000081 /* legacy mode SYSCALL target */
 #define MSR_LSTAR 0xc0000082 /* long mode SYSCALL target */
