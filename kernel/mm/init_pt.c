@@ -18,7 +18,8 @@
 uint64_t *pml4=0;
 static struct e820_entry memory_map[128];
 static int memory_map_num_entries;
-
+uint64_t c_bit;
+uint64_t stack_location = 0x80000000-PAGE_SIZE;
 struct page_table_config{
   uint64_t start;
   uint64_t size;
@@ -38,12 +39,13 @@ struct page_table_config{
 void map_one_page(uint64_t base, uint64_t offset,int prot,int c_bit){
   uint64_t vaddr = base +offset;
   uint64_t *pdp, *pd, *pt;
+  uint64_t c_bit_mask = 1<<c_bit;
   #define PAGING(p, c) do { \
     if(!(*p & PDE64_PRESENT)) { \
       c = (uint64_t*) kframe_allocate_range_pt(1); \
-      *p = PDE64_PRESENT | PDE64_RW | PDE64_USER |(uint64_t) c; \
+      *p = PDE64_PRESENT | PDE64_RW | PDE64_USER |(uint64_t) c|c_bit_mask; \
     } else { \
-      c = (uint64_t*) (*p & -0x1000); \
+      c = (uint64_t*) ((*p & -0x1000) & ~c_bit_mask ); \
     } \
   } while(0);
   
@@ -51,7 +53,6 @@ void map_one_page(uint64_t base, uint64_t offset,int prot,int c_bit){
   PAGING(&pdp[PDPOFF(vaddr)], pd);
   PAGING(&pd[PDOFF(vaddr)], pt);
 #undef PAGING
-  uint64_t c_bit_mask = 1<<c_bit;
   pt[PTOFF(vaddr)] = PDE64_PRESENT | base | c_bit_mask;
   if(prot & PROT_R) pt[PTOFF(vaddr)] |= PDE64_USER;
   if(prot & PROT_W) pt[PTOFF(vaddr)] |= PDE64_RW;
@@ -65,7 +66,7 @@ void map_address(uint64_t base, uint64_t size, uint64_t offset, int prot){
   if(prot&-0x4){
     write_in_console("Invalid mapping prot!");
   }
-  int c_bit = get_cbit();
+  c_bit = get_cbit();
   if(c_bit ==0){
     panic("invalid c_bit!\n");
   }
@@ -76,7 +77,8 @@ void map_address(uint64_t base, uint64_t size, uint64_t offset, int prot){
 }
 void init_kernel_page_tables()
 {
-  unsigned char buffer[20] = {0};
+  
+  //unsigned char buffer[20] = {0};
   /*
   write_in_console("Strat hob parsing to get e820 table in kernel.\n");
   
@@ -113,27 +115,29 @@ void init_kernel_page_tables()
   memory_map[0].address=0x0;
   memory_map[0].type = E820_RAM;
   memory_map[0].length = 0x7ddde000;
-
- 
- 
+  memory_map_num_entries = 1;
+  
   //write_in_console("Start setting up page table.\n");
-  uint64_t page_table = get_usable(KERNEL_PAGING_SIZE);
+  //uint64_t page_table = get_usable(KERNEL_PAGING_SIZE);
+  uint64_t page_table = 0x80000000-PAGE_SIZE-STACK_SIZE-KERNEL_PAGING_SIZE;
   //write_in_console("Page table address:0x");
+
+  
   memset((uint64_t*)page_table,0x0,KERNEL_PAGING_SIZE);
+  
   kframe_allocator_init_pt(page_table,KERNEL_PAGING_SIZE);
   //uint64_to_string((uint64_t)page_table,buffer);
   //write_in_console((char*)buffer);
   //write_in_console("\n");
-
+   
   pml4 = (uint64_t*)kframe_allocate_range_pt(1);
-
   for(int i=0;i<10;i++){
     map_address(pt_config[i].start,pt_config[i].size,pt_config[i].offset,pt_config[i].prot);
   }
 
  //EFER_LME | EFER_LMA| EFER_SCE have been set, just set new cr3
  
-  
+  asm("hlt");
   
 }
 

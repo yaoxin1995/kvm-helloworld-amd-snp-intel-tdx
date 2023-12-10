@@ -19,7 +19,7 @@
 #define MSR_SYSCALL_MASK 0xc0000084
 #define HEAP_SIZE 0x1F400000 //500MB 
 #define DMA_SIZE 0x100000
-#define STACK_SIZE 0x800000
+
 
 int register_syscall() {
   asm(
@@ -101,17 +101,12 @@ void get_tdx_report(){
   }
 }
 
-int kernel_main_sev_snp(uint64_t hob, uint64_t _payload) {  
+int kernel_main_sev_snp(uint64_t hob, uint64_t _payload) {
+  asm("hlt");
   uint64_t ghcb = get_usable(PAGE_SIZE);
   ghcb_init(ghcb| KERNEL_BASE_OFFSET);
   write_in_console("Succeeded in initializing GHCB\n");
-  //stack initialization
-  write_in_console("Start setting up stack and jump to new stack.\n");
-  uint64_t stack = get_usable(STACK_SIZE)|KERNEL_BASE_OFFSET;
-  uint64_t stack_top = stack + STACK_SIZE;
-  asm("mov rsp, %0;"
-    "mov rbp, rsp;"
-      ::"r"(stack_top));
+
   write_in_console("Start setting up heap.\n");
   uint64_t heap = get_usable(HEAP_SIZE);
   init_allocator((void*) ( heap | KERNEL_BASE_OFFSET), HEAP_SIZE);

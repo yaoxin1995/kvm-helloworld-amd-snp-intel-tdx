@@ -258,6 +258,8 @@ static inline uint64_t lower_bits(uint64_t val, unsigned int bits)
 
 	return (val & mask);
 }
+void pvalidate(uint64_t vaddr, int size,  bool validated);
+void ghcb_msr_make_page_shared(uint64_t vaddr);
 void invalidate();
 uint64_t read_msr(uint32_t msr_id);
 void ghcb_termination();

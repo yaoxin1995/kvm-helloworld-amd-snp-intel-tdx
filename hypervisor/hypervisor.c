@@ -200,19 +200,19 @@ int snp_update_memory(int sevfd,int vmfd, struct kvm_userspace_memory_region2* m
   return ret;
 }
 
-int snp_update_kernel(int sevfd,int vmfd, struct kvm_userspace_memory_region2* memory_region,int page_type){
+int snp_update_kernel(int sevfd,int vmfd, struct kvm_userspace_memory_region2* memory_region){
   int ret=0;
   struct kvm_sev_snp_launch_update * update = (struct kvm_sev_snp_launch_update*)malloc(sizeof(struct kvm_sev_snp_launch_update));
   memset(update,0x0,sizeof(struct kvm_sev_snp_launch_update));
   update->start_gfn = KERNEL_ADDRESS/0x1000;
   update->uaddr = memory_region->userspace_addr+KERNEL_ADDRESS;
   update->len = KERNEL_SIZE;
-  update->page_type = page_type;
+  update->page_type = KVM_SEV_SNP_PAGE_TYPE_NORMAL;
   int error = 0;
   if(sev_ioctl(sevfd,vmfd,KVM_SEV_SNP_LAUNCH_UPDATE,(void*)update,&error)<0){
     pexit("KVM_SEV_SNP_LAUNCH_UPDATE kernel failed");
   }
-  ret =kvm_convert_memory(vmfd,memory_region->guest_phys_addr,RAM_SIZE,true);
+  ret =kvm_convert_memory(vmfd,KERNEL_ADDRESS,KERNEL_SIZE,true);
   return ret;
 
 }
@@ -478,8 +478,8 @@ VM *kvm_init(const char * bios_name, const char * kernel_name)
         fill_cpuid_page(supported_cpuid,cpuid_page);
 
          //retry once if failed
-        if(snp_update_memory(sevfd,vmfd,mem_region_cpuid,0x6)<0){
-          if(snp_update_memory(sevfd,vmfd,mem_region_cpuid,0x6)<0){
+        if(snp_update_memory(sevfd,vmfd,mem_region_cpuid,KVM_SEV_SNP_PAGE_TYPE_CPUID)<0){
+          if(snp_update_memory(sevfd,vmfd,mem_region_cpuid,KVM_SEV_SNP_PAGE_TYPE_CPUID)<0){
             pexit("KVM_SEV_SNP_LAUNCH_UPDATE cpuid page failed");
           };
         };
@@ -505,7 +505,7 @@ VM *kvm_init(const char * bios_name, const char * kernel_name)
           pexit("KVM_SET_USER_MEMORY_REGION2 secret page failed");
         };
 
-        if(snp_update_memory(sevfd,vmfd,mem_region_secret,0x5)<0){
+        if(snp_update_memory(sevfd,vmfd,mem_region_secret,KVM_SEV_SNP_PAGE_TYPE_SECRETS)<0){
             pexit("KVM_SEV_SNP_LAUNCH_UPDATE secret page failed");
         };
         regions[slot_num++] = mem_region_secret;
@@ -530,7 +530,7 @@ VM *kvm_init(const char * bios_name, const char * kernel_name)
         if(ioctl(vmfd,KVM_SET_USER_MEMORY_REGION2,mem_region_normal)<0){
         pexit("KVM_SET_USER_MEMORY_REGION2 normal failed");
         };
-        if(snp_update_memory(sevfd,vmfd,mem_region_normal,0x1)<0){
+        if(snp_update_memory(sevfd,vmfd,mem_region_normal,KVM_SEV_SNP_PAGE_TYPE_NORMAL)<0){
             pexit("KVM_SEV_SNP_LAUNCH_UPDATE normal failed");
         };
         regions[slot_num++] = mem_region_normal;
@@ -568,7 +568,7 @@ VM *kvm_init(const char * bios_name, const char * kernel_name)
   regions[slot_num++] = mem_region_ram;
   
   //update kernel
-  if(snp_update_kernel(sevfd,vmfd,mem_region_ram,0x1)<0){
+  if(snp_update_kernel(sevfd,vmfd,mem_region_ram)<0){
       pexit("KVM_SEV_SNP_LAUNCH_UPDATE kernel failed");
   };
 
