@@ -53,7 +53,7 @@ void *sys_mmap(
   if(fd >= 0) {
     int ret = hp_lseek(fd, offset, SEEK_SET);
     if(ret < 0) return (void*) (int64_t) ret;
-    uint64_t tmp_buffer_address = translate(tmp_buffer, 0, 1)&~SHARED_BIT;
+    uint64_t tmp_buffer_address = translate(tmp_buffer, 0, 1)&~C_BIT_MASK;
     uint64_to_string(tmp_buffer_address,buffer); 
     write_in_console("reading to tmp buffer physical address: 0x");
     write_in_console((char*)buffer);

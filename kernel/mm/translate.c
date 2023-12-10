@@ -6,7 +6,6 @@
 #include <utils/tdx.h>
 #include <utils/sev_snp.h>
 
-
 static inline uint64_t* get_pml4_addr() {
   uint64_t pml4;
   asm("mov %[pml4], cr3" : [pml4]"=r"(pml4));
@@ -21,7 +20,7 @@ static inline uint64_t* get_pml4_addr() {
 #define PTOFF(v) _OFFSET(v, 12)
 
 /* if vaddr is already mapping to some address, overwrite it. */
-void add_trans_user(void* vaddr_, void* paddr_, int prot) {
+void add_trans_user(void* vaddr_, void* paddr_, int prot, bool private) {
   int c_bit = get_cbit();
   if(c_bit ==0){
     panic("invalid c_bit!\n");
@@ -31,7 +30,7 @@ void add_trans_user(void* vaddr_, void* paddr_, int prot) {
   /* validation of vaddr should be done in sys_mmap, so we can simply panic here */
   if(!USER_MEM_RANGE_OK(vaddr)) panic("translate.c#add_trans_user: not allowed");
   uint64_t paddr = (uint64_t) paddr_ & ~KERNEL_BASE_OFFSET;
-  uint64_t* pml4 = get_pml4_addr(), *pdp, *pd, *pt;
+  uint64_t* pml4 = (uint64_t *)((uint64_t)get_pml4_addr()& ~c_bit_mask), *pdp, *pd, *pt;
 #define PAGING(p, c) do { \
     if(!(*p & PDE64_PRESENT)) { \
       c = (uint64_t*) (kframe_allocate_range_pt(1)| KERNEL_BASE_OFFSET); \
@@ -46,15 +45,19 @@ void add_trans_user(void* vaddr_, void* paddr_, int prot) {
   PAGING(&pd[PDOFF(vaddr)], pt);
 #undef PAGING
   pt[PTOFF(vaddr)] = PDE64_PRESENT | paddr;
+  if(private) pt[PTOFF(vaddr)] |= c_bit_mask;
   if(prot & PROT_R) pt[PTOFF(vaddr)] |= PDE64_USER;
   if(prot & PROT_W) pt[PTOFF(vaddr)] |= PDE64_RW;
-
+  
   asm  volatile(
     "mov rax, QWORD PTR [rip + pml4]\n"  
+    "lea rcx, QWORD PTR [rip+c_bit]\n"
+    "mov rdx, [rcx]\n"
+    "bts rax,rdx\n"
     "mov cr3, rax\n"                   
     :
     : 
-    : "rax"
+    : "rax","rcx","rdx"
  );
 }
 
@@ -65,7 +68,7 @@ int modify_permission(void *vaddr, int prot) {
     panic("invalid c_bit!\n");
   }
   uint64_t c_bit_mask = 1UL<<c_bit;
-  uint64_t *pml4 = get_pml4_addr(), *pdp, *pd, *pt;
+  uint64_t *pml4 = (uint64_t *)((uint64_t)get_pml4_addr()& ~c_bit_mask), *pdp, *pd, *pt;
 #define PAGING(p, c) do { \
     if(!(*p & PDE64_PRESENT)) return -1; \
     c = (uint64_t*) (((*p & -0x1000) | KERNEL_BASE_OFFSET)& ~c_bit_mask);\
@@ -91,7 +94,7 @@ uint64_t translate(void *vaddr, int usermode, int writable) {
     panic("invalid c_bit!\n");
   }
   uint64_t c_bit_mask = 1UL<<c_bit;
-  uint64_t *pml4 = get_pml4_addr(), *pdp, *pd, *pt, *ret;
+  uint64_t *pml4 = (uint64_t *)((uint64_t)get_pml4_addr()& ~c_bit_mask), *pdp, *pd, *pt, *ret;
 #define PAGING(p, c) do { \
     if(!(*p & PDE64_PRESENT)) return -1; \
     if(usermode && !(*p & PDE64_USER)) return -1; \
@@ -106,9 +109,6 @@ uint64_t translate(void *vaddr, int usermode, int writable) {
     return (pd[PDOFF(vaddr)] & -0x200000) + ((uint64_t) vaddr & 0x1fffff);
   PAGING(&pt[PTOFF(vaddr)], ret);
 #undef PAGING
-  if(ret[0]&c_bit_mask)
-    return ((physical(ret) + ((uint64_t) vaddr & 0xfff))|c_bit_mask);
-  else
     return (physical(ret) + ((uint64_t) vaddr & 0xfff));
 }
 

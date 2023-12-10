@@ -2,7 +2,7 @@
 #define TRANSLATE_H
 
 #include <stdint.h>
-
+#include <stdbool.h>
 #include <elf/elf.h>
 
 #define PROT_R 1
@@ -38,7 +38,7 @@
 
 uint64_t translate(void* vaddr, int usermode, int writable);
 uint64_t physical(void *vaddr);
-void add_trans_user(void* vaddr, void* paddr, int prot);
+void add_trans_user(void* vaddr_, void* paddr_, int prot, bool private);
 int modify_permission(void *vaddr, int prot);
 int pf_to_prot(Elf64_Word pf);
 

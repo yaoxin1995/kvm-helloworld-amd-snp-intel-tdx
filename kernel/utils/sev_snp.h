@@ -6,12 +6,12 @@
 #define CPUID_PAGE 0xffe02000
 #define CBIT_MASK 0x3f
 #define SNP_CPUID_FUNCTION_UNKNOWN 0xFFFFFFFF
-#define SNP_PAGE_STATE_PRIVATE 1
+#define SNP_PAGE_STATE_PRIVATE 1UL
 #define SNP_PAGE_STATE_SHARED 2UL
-#define GPA_REQ 0x12
-#define GPA_RESP 0x13
-#define PSC_REQ 0x14
-#define PSC_RESP 0x15
+#define GPA_REQ 0x012UL
+#define GPA_RESP 0x013UL
+#define PSC_REQ 0x014UL
+#define PSC_RESP 0x015UL
 #define PSC_OP_POS 52
 #define PSC_ERROR_POS 32
 #define PSC_ERROR_MASK ((1UL<<(PSC_ERROR_POS))-1)
@@ -262,7 +262,7 @@ void pvalidate(uint64_t vaddr, int size,  bool validated);
 void ghcb_msr_make_page_shared(uint64_t vaddr);
 void invalidate();
 uint64_t read_msr(uint32_t msr_id);
-void ghcb_termination();
+void ghcb_termination(uint64_t reason, uint64_t value);
 void set_offset_valid(uint64_t *offset_address);
 bool test_offset_valid(uint64_t *offset_address);
 int vmgexit(uint64_t exit_code, uint64_t exit_info_1,uint64_t exit_info_2);

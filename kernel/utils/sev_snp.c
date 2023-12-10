@@ -1,6 +1,7 @@
 #include <utils/sev_snp.h>
 #include <utils/panic.h>
 #include <mm/translate.h>
+#include <utils/string.h>
 
 struct ghcb *ghcb = 0;
 void pvalidate(uint64_t vaddr, int size,  bool validated){
@@ -20,7 +21,11 @@ void pvalidate(uint64_t vaddr, int size,  bool validated){
     {
     case 0:
         if((uint8_t)rmp_changed != 0){
-            write_in_console("rmp not changed!\n");
+            unsigned char buffer[20] = {0};
+            uint64_to_string(vaddr,buffer);
+            write_in_console("rmp not changed!vaddr:0x ");
+            write_in_console((char*)buffer);
+            write_in_console("\n");
         };
         break;
     case 1:
@@ -81,13 +86,11 @@ uint64_t vmgexit_msr(uint64_t request_code, uint64_t value, uint64_t expected_re
     asm(
          "rep;vmmcall"
     );
-    asm("hlt");
     uint64_t retcode = read_msr(MSR_GHCB);
     if (expected_response != (retcode & 0xFFF)) {
          panic("vmgexit error"); 
     }
-
-    return retcode & (!0xFFF);
+    return (retcode & (~0xFFFUL));
 }
 
 int vmgexit(uint64_t exit_code, uint64_t exit_info_1,uint64_t exit_info_2){
@@ -124,7 +127,7 @@ int vmgexit(uint64_t exit_code, uint64_t exit_info_1,uint64_t exit_info_2){
 void ghcb_msr_make_page_shared(uint64_t vaddr) {
     pvalidate(vaddr, Size4K, false);
     if(clear_c_bit((uint64_t *)vaddr,PAGE_SIZE)<0){
-        ghcb_termination();
+        ghcb_termination(0,0);
     };
 
     uint64_t gpa = physical((void *)vaddr);// here used in identity map when running the kernel code
@@ -152,10 +155,10 @@ void invalidate(){
 
 void __ghcb_block_make_pages_shared(uint64_t vaddr, uint64_t npages){
     for(int i=0;i<npages;i++){
-         pvalidate(vaddr, Size4K, false);
+         pvalidate(vaddr+i*PAGE_SIZE, Size4K, false);
     }
     clear_c_bit((uint64_t *)vaddr,npages*PAGE_SIZE);
-    struct snp_psc_desc * snp_psc_desc = (struct snp_psc_desc*)&ghcb->shared_buffer;
+    struct snp_psc_desc * snp_psc_desc = (struct snp_psc_desc*)ghcb->shared_buffer;
     snp_psc_desc->hdr.cur_entry=0;
     snp_psc_desc->hdr.end_entry=npages-1;
     uint64_t gpa = physical((void *)vaddr);
@@ -163,9 +166,7 @@ void __ghcb_block_make_pages_shared(uint64_t vaddr, uint64_t npages){
         set_entry(&snp_psc_desc->entries[i],gpa,SNP_PAGE_STATE_SHARED,Size4K);
         gpa+=PAGE_SIZE;
     }
-    while(0){
-        if(snp_psc_desc->hdr.cur_entry>snp_psc_desc->hdr.end_entry)
-            break;
+    while(snp_psc_desc->hdr.cur_entry<=snp_psc_desc->hdr.end_entry){
         invalidate();
         ghcb->save.sw_scratch = (uint64_t)physical(ghcb->shared_buffer);
         set_offset_valid(&ghcb->save.sw_scratch);
@@ -178,9 +179,7 @@ void __ghcb_block_make_pages_shared(uint64_t vaddr, uint64_t npages){
         if(snp_psc_desc->hdr.reserved!=0){
             panic("vmgexit psc snp_psc_desc reserved should be zero!");
         }
-           
     }
-
 }
 
 void ghcb_block_make_pages_shared(uint64_t vaddr, uint64_t npages){
@@ -200,8 +199,8 @@ void ghcb_block_io_write_8(uint16_t port, uint8_t byte){
     vmgexit(SVM_EXIT_IOIO, IOIO_DATA_8|IOIO_TYPE_OUT|(uint64_t)port<<16, 0);
 }
 
-void ghcb_termination(){
-    vmgexit_msr(EXIT_REQ,0,0);
+void ghcb_termination(uint64_t reason, uint64_t value){
+    vmgexit_msr(EXIT_REQ,(value<<16)|((reason&0x7)<<12),0);
 }
 
 void ghcb_init(uint64_t vaddr){

@@ -54,10 +54,12 @@ void switch_user(uint64_t argc, char *argv[]) {
   write_in_console("\n");
   char *s = kmalloc(total_len, MALLOC_PAGE_ALIGN);
   uint64_t sp = physical(s);
-  add_trans_user((void*) sp, (void*) sp, PROT_RW); /* sp is page aligned */
+  add_trans_user((void*) sp, (void*) sp, PROT_RW,true); /* sp is page aligned */
+
   /* copy strings and argv onto user-accessible area */
-  for(int i = 0; i < argc; i++)
+  for(int i = 0; i < argc; i++){
     argv[i] = (char*) (argv[i] - (char*) argv + sp);
+  } 
   argv[argc] = 0;
   memcpy(s, argv, total_len);
   sys_execve(argv[0], (char**) sp, (char**) (sp + argc * sizeof(char*)));
@@ -102,13 +104,12 @@ void get_tdx_report(){
 }
 
 int kernel_main_sev_snp(uint64_t hob, uint64_t _payload) {
-  /*for(uint64_t i=KERNEL_BASE_OFFSET;i<(0x7ddde000|KERNEL_BASE_OFFSET);i+=0x1000){
-    pvalidate(i, Size4K, false);
-  }*/
-  uint64_t ghcb = 0x80000000-PAGE_SIZE-STACK_SIZE-KERNEL_PAGING_SIZE-PAGE_SIZE;
+  for(uint64_t i=KERNEL_BASE_OFFSET;i<(0x7ddde000|KERNEL_BASE_OFFSET);i+=0x1000){
+    pvalidate(i, Size4K, true);
+  }
+  uint64_t ghcb = 0x80000000-PAGE_SIZE-STACK_SIZE-KERNEL_PAGING_SIZE-PAGE_SIZE;//0x7EEFE000
   ghcb_init(ghcb| KERNEL_BASE_OFFSET);
   write_in_console("Succeeded in initializing GHCB\n");
-  
   write_in_console("Start setting up heap.\n");
   uint64_t heap = get_usable(HEAP_SIZE);
   init_allocator((void*) ( heap | KERNEL_BASE_OFFSET), HEAP_SIZE);
@@ -129,9 +130,8 @@ int kernel_main_sev_snp(uint64_t hob, uint64_t _payload) {
   idt = (struct idt_entry*)(get_usable(PAGE_SIZE)|KERNEL_BASE_OFFSET);
   memset(idt,0x0,PAGE_SIZE);
   idt_init(idt);
-  write_in_console("Start enabling apic interrupt.\n");
+  //write_in_console("Start enabling apic interrupt.\n");
   //enable_apic_interrupt(); // for tdx requirement
-  get_tdx_report();
   if(register_syscall() != 0) return 1;
   
 

@@ -348,7 +348,7 @@ int kvm_handle_vmgexit(VM *vm, __u64 *ghcb_msr, __u64 *psc_ret)
     uint16_t cur_entry;
     int i;
     uint8_t shared_buf[GHCB_SHARED_BUF_SIZE];
-    ghcb = (struct ghcb *)ghcb_msr;
+    ghcb = (struct ghcb *)(vm->regions[vm->region_num-1]->userspace_addr+*ghcb_msr);
     if (*ghcb_msr & GHCB_MSR_INFO_MASK) {
         return kvm_handle_vmgexit_msr_protocol(vm,ghcb_msr);
     }
@@ -408,7 +408,7 @@ VM *kvm_init(const char * bios_name, const char * kernel_name)
   if (vmfd < 0)
     pexit("ioctl(KVM_CREATE_VM)");
 
-  if(kvm_vm_enable_cap(vmfd,KVM_CAP_SPLIT_IRQCHIP,24) < 0){
+  /*if(kvm_vm_enable_cap(vmfd,KVM_CAP_SPLIT_IRQCHIP,24) < 0){
     pexit("Enable irq split failed");
   };
 
@@ -424,7 +424,7 @@ VM *kvm_init(const char * bios_name, const char * kernel_name)
     pexit("KVM_SET_GSI_ROUTING failed");
   }
   free(irq_routing);
-  
+  */
   uint64_t data = 0;
   int error = 0;
   if(sev_ioctl(sevfd,vmfd,KVM_SEV_SNP_INIT,(void*)&data,&error)<0){
@@ -618,7 +618,7 @@ void execute(VM *vm)
     run_ret=ioctl(vm->vcpufd, KVM_RUN, NULL);
 
 
-    if (run_ret < 0) {
+    if (run_ret < 0&&vm->run->exit_reason!=KVM_EXIT_VMGEXIT) {
       fprintf(stderr, "error: kvm run failed %s\n", strerror(-run_ret));
       break;
     }
@@ -680,6 +680,7 @@ void execute(VM *vm)
       }else{
          printf("KVM_EXIT_SYSTEM_EVENT\n");
       }
+      break;
     }
     default:
       error("Unhandled reason: %d\n", vm->run->exit_reason);

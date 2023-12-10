@@ -15,5 +15,5 @@ void panic(const char *s){
     write_in_console(s);
     ghcb_block_io_write_8(0x3f8,'\n');
     //tdvmcall_io_write_8(0x3f8,'\n');
-    ghcb_termination();
+    ghcb_termination(0,0);
 }
