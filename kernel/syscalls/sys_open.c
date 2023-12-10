@@ -14,7 +14,6 @@ int sys_open(const char *path) {
    write_in_console("Have copied from user\n");
   if(dst == 0) return -ENOMEM;
   int fd = hp_open(physical(dst));
-  asm("hlt");
   unsigned char buffer[20] = {0};
   uint64_to_string((uint64_t)fd,buffer);
   write_in_console("fd get: 0x");

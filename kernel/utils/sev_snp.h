@@ -261,6 +261,7 @@ static inline uint64_t lower_bits(uint64_t val, unsigned int bits)
 void pvalidate(uint64_t vaddr, int size,  bool validated);
 void ghcb_msr_make_page_shared(uint64_t vaddr);
 void invalidate();
+void write_msr(uint64_t val, uint32_t msr);
 uint64_t read_msr(uint32_t msr_id);
 void ghcb_termination(uint64_t reason, uint64_t value);
 void set_offset_valid(uint64_t *offset_address);

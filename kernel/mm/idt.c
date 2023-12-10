@@ -372,7 +372,7 @@ void __attribute__((ms_abi))virtualization_inner(struct InterruptNoErrorStack * 
 
 
 
-void vc_ioio_exitinfo(uint64_t *exitinfo, struct InterruptErrorStack * stack)
+void vc_ioio_exitinfo(uint64_t *exitinfo, struct InterruptErrorStack * stack, uint64_t* op_length)
 {   
     uint8_t* rip = (uint8_t*)stack->iret.rip;
 	*exitinfo = 0;
@@ -398,14 +398,20 @@ void vc_ioio_exitinfo(uint64_t *exitinfo, struct InterruptErrorStack * stack)
         case 0x65:
         //segment prefix
             found = true;
+            *op_length+=1;
+            break;
         case 0x66:
         //operand byte prefix
             opnd_bytes ^= 6;
             found = true;
+            *op_length+=1;
+            break;
         case 0x67:
         //addr_bytes prefix
             addr_bytes ^= 12;
             found = true;
+            *op_length+=1;
+            break;
         default:
             break;
         }
@@ -438,6 +444,7 @@ void vc_ioio_exitinfo(uint64_t *exitinfo, struct InterruptErrorStack * stack)
 	case 0xe5:
 		*exitinfo |= IOIO_TYPE_IN;
 		*exitinfo |= opcode[1] << 16;
+        *op_length+=1;
 		break;
 
 	/* OUT immediate opcodes */
@@ -445,6 +452,7 @@ void vc_ioio_exitinfo(uint64_t *exitinfo, struct InterruptErrorStack * stack)
 	case 0xe7:
 		*exitinfo |= IOIO_TYPE_OUT;
 		*exitinfo |= opcode[1] << 16;
+        *op_length+=1;
 		break;
 
 	/* IN register opcodes */
@@ -594,7 +602,6 @@ void vc_handle_ioio(uint64_t exit_info_1,struct InterruptErrorStack * stack, boo
 
 
 void __attribute__((ms_abi))vmm_communication_exception_inner(struct InterruptErrorStack * stack){
-    asm("hlt");
     invalidate();
     switch (stack->code)
     {
@@ -616,11 +623,12 @@ void __attribute__((ms_abi))vmm_communication_exception_inner(struct InterruptEr
         break;
     case SVM_EXIT_IOIO:{
         uint64_t exit_info_1;
+        uint64_t op_length=1;
         bool need_retry = false;
-        vc_ioio_exitinfo(&exit_info_1,stack);
+        vc_ioio_exitinfo(&exit_info_1,stack,&op_length);
         vc_handle_ioio(exit_info_1,stack,&need_retry);
         if(!need_retry)
-            stack->iret.rip += 2;
+            stack->iret.rip += op_length;
     }
         break;
     case SVM_EXIT_MSR:{
@@ -636,7 +644,13 @@ void __attribute__((ms_abi))vmm_communication_exception_inner(struct InterruptEr
             ghcb->save.rdx = stack->scratch.rdx;
             set_offset_valid(&ghcb->save.rdx);
         }
-        if(vmgexit(SVM_EXIT_MSR,exit_info_1,0)<0){
+        uint64_t ret = vmgexit(SVM_EXIT_MSR,exit_info_1,0);
+        if(ret <0){
+            unsigned char buffer[20] = {0};
+            write_in_console("SVM_EXIT_MSR error code: 0x");
+            uint64_to_string(ret,buffer);
+            write_in_console((char*)buffer);
+            write_in_console("\n");
             panic("SVM_EXIT_MSR vmgexit error!");
         };
 
@@ -644,8 +658,7 @@ void __attribute__((ms_abi))vmm_communication_exception_inner(struct InterruptEr
             stack->scratch.rax = ghcb->save.rax;
             stack->scratch.rdx = ghcb->save.rdx;
         }
-
-
+        stack->iret.rip += 2;
     }
         break;
     case SVM_EXIT_WBINVD:

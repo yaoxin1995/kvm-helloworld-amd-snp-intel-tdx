@@ -118,6 +118,7 @@ void init_tss(){
     load_tss(tss_sel);
 }
 
+
 void init_gdt(struct gdt_entry * allocated_gdt, struct tss * allocated_tss){
     gdt = allocated_gdt;
     tss = allocated_tss;

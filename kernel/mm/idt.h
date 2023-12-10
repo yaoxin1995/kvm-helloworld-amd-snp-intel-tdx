@@ -125,8 +125,11 @@ struct DescriptorTablePointer {
             SCRATCH_PUSH() \
             PRESERVED_PUSH() \
             "mov rcx, rsp;" \
+            "mov rbx, rsp;"\
+            "and rsp,(~(0x40-1));"\
             "lea rax, %a0;" \
             "call rax;" \
+            "mov rsp, rbx;"\
             PRESERVED_POP() \
             SCRATCH_POP() \
             asm_epilogue \

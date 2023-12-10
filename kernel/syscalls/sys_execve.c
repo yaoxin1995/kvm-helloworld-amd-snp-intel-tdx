@@ -13,6 +13,7 @@
 #include <utils/errno.h>
 #include <utils/misc.h>
 #include <utils/string.h>
+#include <utils/sev_snp.h>
 
 static int load_binary(int fd, process* p) {
   void *buf = smalloc(0x1000, MALLOC_NO_ALIGN);
@@ -175,7 +176,60 @@ int sys_execve(const char *path, char *const argv[], char *const envp[]) {
 
   write_in_console("\n");
   
+  uint64_t efer = read_msr(IA32_EFER);
+  write_in_console("IA32_EFER:0x");
+  uint64_to_string(efer,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
+
+
+  uint64_t star = read_msr(0xc0000081);
+  write_in_console("STAR:0x");
+  uint64_to_string(star,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
+
+  uint64_t lstar = read_msr(0xc0000082);
+  write_in_console("LSTAR:0x");
+  uint64_to_string(lstar,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
+
+  uint64_t cstar = read_msr(0xc0000083);
+  write_in_console("CSTAR:0x");
+  uint64_to_string(cstar,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
+
+  uint64_t sfmasr = read_msr(0xc0000084);
+  write_in_console("SFMASK:0x");
+  uint64_to_string(sfmasr,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
+
+  uint64_t U_CET = read_msr(0x6A0);
+  write_in_console("U_CET:0x");
+  uint64_to_string(U_CET,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
+
+  uint64_t ssp_cpl3 = read_msr(0x6A7);
+  write_in_console("ssp_cpl3:0x");
+  uint64_to_string(ssp_cpl3,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
   
+  uint64_t cpl = 0xff;
+  asm volatile(
+    "mov %0, cs;"
+    "and %0, 0x03;"
+    :"=r"(cpl)
+    ::
+  );
+  write_in_console("cpl:0x");
+  uint64_to_string(cpl,buffer);
+  write_in_console((char*)buffer);
+  write_in_console("\n");
 
   asm volatile(
     "mov [rip + kernel_stack], rsp;"
