@@ -12,7 +12,8 @@
 #define PROT_RWX (PROT_RW | PROT_X)
 #define IA32_EFER 0xC0000080
 #define SHARED_BIT (1UL<<51) //bit(51)
-
+#define C_BIT_MASK (1UL<<51) //bit(51)
+#define PAGE_MASK (0xfffffffffffff000)
 /* 64-bit page * entry bits */
 #define PDE64_PRESENT 1
 #define PDE64_RW (1 << 1)
@@ -24,7 +25,7 @@
 
 #define PT_MAPPING_SIZE (0x200000)
 #define PAGE_SIZE (0x1000)
-#define KERNEL_PAGING_SIZE (0x800000)
+#define KERNEL_PAGING_SIZE (0x900000)
 #define MIN_MMAP_ADDR KERNEL_PAGING_SIZE
 #define KERNEL_BASE_OFFSET (0x8000000000llu)
 
@@ -43,5 +44,4 @@ int pf_to_prot(Elf64_Word pf);
 
 int set_c_bit(uint64_t *vaddr, uint64_t len);
 int clear_c_bit(uint64_t *vaddr, uint64_t len);
-
 #endif

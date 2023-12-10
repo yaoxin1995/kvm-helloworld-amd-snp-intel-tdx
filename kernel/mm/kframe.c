@@ -9,7 +9,7 @@ typedef struct kframe_allocator {
 } kframe_alloc_t;
 
 #define SHARED_BITMAP_SIZE 4096 /*4KB*/
-#define PAGE_TABLE_BITMAP_SIZE 0x800 /*1KB*/
+#define PAGE_TABLE_BITMAP_SIZE 0x900 
 
 static kframe_alloc_t shared_allocator;
 static kframe_alloc_t page_table_allocator;

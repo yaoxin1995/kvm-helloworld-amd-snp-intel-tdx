@@ -7,7 +7,7 @@ void pvalidate(uint64_t vaddr, int size,  bool validated){
     uint32_t rmp_changed;
     uint64_t ret;
     uint32_t flag = (uint32_t)validated;
-    vaddr &= (!0xFFF); 
+    vaddr &= PAGE_MASK; 
     // pvalidate and output the carry bit in edx
     // return value in rax
    asm volatile(
@@ -15,7 +15,6 @@ void pvalidate(uint64_t vaddr, int size,  bool validated){
         "setc    dl"
         : "=a"(ret), "=d"(rmp_changed)
         : "a"(vaddr), "c"((uint64_t)size), "d"(flag)  
-        : "cc"
     );
     switch (ret)
     {
@@ -52,7 +51,7 @@ bool test_offset_valid(uint64_t *offset_address) {
 
 
 void write_msr(uint64_t val, uint32_t msr){
-    uint32_t low = (uint32_t)val;
+    uint32_t low = (uint32_t)(val&0x00000000ffffffff);
     uint32_t high = (uint32_t)(val>>32);
     asm volatile(
         "wrmsr"
@@ -78,13 +77,12 @@ uint64_t read_msr(uint32_t msr_id) {
 
 uint64_t vmgexit_msr(uint64_t request_code, uint64_t value, uint64_t expected_response) {
     uint64_t val = request_code | value;
-   
     write_msr(val,MSR_GHCB);
     asm(
-        ".byte 0xf3,0x0f,0x01,0xd9;"
+         "rep;vmmcall"
     );
+    asm("hlt");
     uint64_t retcode = read_msr(MSR_GHCB);
-
     if (expected_response != (retcode & 0xFFF)) {
          panic("vmgexit error"); 
     }
@@ -104,7 +102,7 @@ int vmgexit(uint64_t exit_code, uint64_t exit_info_1,uint64_t exit_info_2){
     uint64_t gpa = physical(ghcb);
     write_msr(gpa,MSR_GHCB);
     asm(
-        ".byte 0xf3,0x0f,0x01,0xd9;"
+        "rep;vmmcall"
     );
     if ((ghcb->save.sw_exit_info1 & 0xffffffff) == 1){
         uint64_t exit_info2 = ghcb->save.sw_exit_info2;
@@ -124,17 +122,18 @@ int vmgexit(uint64_t exit_code, uint64_t exit_info_1,uint64_t exit_info_2){
 }
 
 void ghcb_msr_make_page_shared(uint64_t vaddr) {
-
     pvalidate(vaddr, Size4K, false);
-    clear_c_bit((uint64_t *)vaddr,PAGE_SIZE);
+    if(clear_c_bit((uint64_t *)vaddr,PAGE_SIZE)<0){
+        ghcb_termination();
+    };
+
     uint64_t gpa = physical((void *)vaddr);// here used in identity map when running the kernel code
 
     uint64_t shared_op = SNP_PAGE_STATE_SHARED <<PSC_OP_POS;
 
     uint64_t val = gpa | shared_op;
-
+    
     uint64_t ret = vmgexit_msr(PSC_REQ, val,PSC_RESP);
-
     if ((ret & PSC_ERROR_MASK) != 0) {
         panic("ghcb_msr_make_page_shared error");
     }
@@ -205,7 +204,7 @@ void ghcb_termination(){
     vmgexit_msr(EXIT_REQ,0,0);
 }
 
-void ghcb_init(uint64_t vaddr ){
+void ghcb_init(uint64_t vaddr){
     ghcb_msr_make_page_shared(vaddr);
     uint64_t gpa = physical((void *)vaddr);
     uint64_t ret = vmgexit_msr(GPA_REQ,gpa,GPA_RESP);

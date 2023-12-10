@@ -21,15 +21,15 @@ _start:
    mov rbp,rsp
    lea rax, [rip + init_kernel_page_tables]
    callq rax
-   hlt
 # enable page tables
-   lea rax, QWORD PTR [rip+pml4]
+   mov rax, QWORD PTR [rip+pml4]
    lea rcx, QWORD PTR [rip+c_bit]
-   bts rax, rcx
+   mov rdx, [rcx]
+   bts rax,rdx 
    mov cr3, rax
-   hlt
 # enable cache
 # all is good. now go to the kernel start
+  
   lea rax, [rip + kernel_main_sev_snp]
   callq rax
 

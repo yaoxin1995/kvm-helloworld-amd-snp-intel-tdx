@@ -22,6 +22,11 @@ static inline uint64_t* get_pml4_addr() {
 
 /* if vaddr is already mapping to some address, overwrite it. */
 void add_trans_user(void* vaddr_, void* paddr_, int prot) {
+  int c_bit = get_cbit();
+  if(c_bit ==0){
+    panic("invalid c_bit!\n");
+  }
+  uint64_t c_bit_mask = 1UL<<c_bit;
   uint64_t vaddr = (uint64_t) vaddr_;
   /* validation of vaddr should be done in sys_mmap, so we can simply panic here */
   if(!USER_MEM_RANGE_OK(vaddr)) panic("translate.c#add_trans_user: not allowed");
@@ -30,10 +35,10 @@ void add_trans_user(void* vaddr_, void* paddr_, int prot) {
 #define PAGING(p, c) do { \
     if(!(*p & PDE64_PRESENT)) { \
       c = (uint64_t*) (kframe_allocate_range_pt(1)| KERNEL_BASE_OFFSET); \
-      *p = PDE64_PRESENT | PDE64_RW | PDE64_USER |(uint64_t) physical(c); \
+      *p = PDE64_PRESENT | PDE64_RW | PDE64_USER |(uint64_t) physical(c)|c_bit_mask; \
     } else { \
       if(!(*p & PDE64_USER)) panic("translate.c#add_trans_user: invalid address"); \
-      c = (uint64_t*) ((*p & -0x1000) | KERNEL_BASE_OFFSET); \
+      c = (uint64_t*) (((*p & -0x1000) | KERNEL_BASE_OFFSET)& ~c_bit_mask); \
     } \
   } while(0);
   PAGING(&pml4[PML4OFF(vaddr)], pdp); 
@@ -55,10 +60,15 @@ void add_trans_user(void* vaddr_, void* paddr_, int prot) {
 
 
 int modify_permission(void *vaddr, int prot) {
+  int c_bit = get_cbit();
+  if(c_bit ==0){
+    panic("invalid c_bit!\n");
+  }
+  uint64_t c_bit_mask = 1UL<<c_bit;
   uint64_t *pml4 = get_pml4_addr(), *pdp, *pd, *pt;
 #define PAGING(p, c) do { \
     if(!(*p & PDE64_PRESENT)) return -1; \
-    c = (uint64_t*) ((*p & -0x1000) | KERNEL_BASE_OFFSET);\
+    c = (uint64_t*) (((*p & -0x1000) | KERNEL_BASE_OFFSET)& ~c_bit_mask);\
   } while(0);
   PAGING(&pml4[PML4OFF(vaddr)], pdp);
   PAGING(&pdp[PDPOFF(vaddr)], pd);
@@ -76,12 +86,17 @@ int modify_permission(void *vaddr, int prot) {
  * returns -1 if page not presented or permission not matched
  */
 uint64_t translate(void *vaddr, int usermode, int writable) {
+  int c_bit = get_cbit();
+  if(c_bit ==0){
+    panic("invalid c_bit!\n");
+  }
+  uint64_t c_bit_mask = 1UL<<c_bit;
   uint64_t *pml4 = get_pml4_addr(), *pdp, *pd, *pt, *ret;
 #define PAGING(p, c) do { \
     if(!(*p & PDE64_PRESENT)) return -1; \
     if(usermode && !(*p & PDE64_USER)) return -1; \
     if(writable && !(*p & PDE64_RW)) return -1; \
-    c = (uint64_t*) ((*p & -0x1000) | KERNEL_BASE_OFFSET);\
+    c = (uint64_t*) (((*p & -0x1000) | KERNEL_BASE_OFFSET)& ~c_bit_mask);\
   } while(0);
   PAGING(&pml4[PML4OFF(vaddr)], pdp);
   PAGING(&pdp[PDPOFF(vaddr)], pd);
@@ -91,7 +106,10 @@ uint64_t translate(void *vaddr, int usermode, int writable) {
     return (pd[PDOFF(vaddr)] & -0x200000) + ((uint64_t) vaddr & 0x1fffff);
   PAGING(&pt[PTOFF(vaddr)], ret);
 #undef PAGING
-  return (physical(ret) + ((uint64_t) vaddr & 0xfff));
+  if(ret[0]&c_bit_mask)
+    return ((physical(ret) + ((uint64_t) vaddr & 0xfff))|c_bit_mask);
+  else
+    return (physical(ret) + ((uint64_t) vaddr & 0xfff));
 }
 
 /* vaddr should always an address of kernel-space */
@@ -113,22 +131,22 @@ int pf_to_prot(Elf64_Word pf) {
 int set_c_bit(uint64_t *vaddr, uint64_t len){
   if((uint64_t)vaddr & 0xfff) panic("set_c_bit:vaddr should aligned with page size 4KB");
   if((uint64_t)len & 0xfff) panic("set_c_bit:len should aligned with page size 4KB");
-  uint64_t *pml4 = get_pml4_addr(), *pdp, *pd, *pt;
+   int c_bit = get_cbit();
+    if(c_bit ==0){
+      panic("invalid c_bit!\n");
+    }
+  uint64_t c_bit_mask = 1UL<<c_bit;
+   uint64_t *pml4 = (uint64_t *)((uint64_t)get_pml4_addr()& ~c_bit_mask), *pdp, *pd, *pt;
   uint64_t vaddr_end = (uint64_t)vaddr+len;
   for(uint64_t i=(uint64_t)vaddr;i<vaddr_end;i+=PAGE_SIZE){
     #define PAGING(p, c) do { \
         if(!(*p & PDE64_PRESENT)) return -1; \
-        c = (uint64_t*) ((*p & -0x1000) | KERNEL_BASE_OFFSET);\
+        c = (uint64_t*) (((*p & -0x1000)| KERNEL_BASE_OFFSET) & ~c_bit_mask);\
         } while(0);
       PAGING(&pml4[PML4OFF((uint64_t*)i)], pdp);
       PAGING(&pdp[PDPOFF((uint64_t*)i)], pd);
       PAGING(&pd[PDOFF((uint64_t*)i)], pt);
     #undef PAGING
-    int c_bit = get_cbit();
-    if(c_bit ==0){
-      panic("invalid c_bit!\n");
-    }
-    uint64_t c_bit_mask = 1<<c_bit;
     pt[PTOFF((uint64_t*)i)]|=c_bit_mask;
   }
   return 0;
@@ -136,23 +154,23 @@ int set_c_bit(uint64_t *vaddr, uint64_t len){
 
 int clear_c_bit(uint64_t *vaddr, uint64_t len){
   if((uint64_t)vaddr & 0xfff) panic("vaddr should aligned with page size 4KB");
-  uint64_t *pml4 = get_pml4_addr(), *pdp, *pd, *pt;
+  int c_bit = get_cbit();
+    if(c_bit ==0){
+      panic("invalid c_bit!\n");
+    }
+  uint64_t c_bit_mask = 1UL<<c_bit;
+  uint64_t *pml4 = (uint64_t *)((uint64_t)get_pml4_addr()& ~c_bit_mask), *pdp, *pd, *pt;
   uint64_t vaddr_end = (uint64_t)vaddr+len;
   for(uint64_t i=(uint64_t)vaddr;i<vaddr_end;i+=PAGE_SIZE){
     #define PAGING(p, c) do { \
         if(!(*p & PDE64_PRESENT)) return -1; \
-        c = (uint64_t*) ((*p & -0x1000) | KERNEL_BASE_OFFSET);\
+        c = (uint64_t*) (((*p & -0x1000)| KERNEL_BASE_OFFSET) & ~c_bit_mask);\
         } while(0);
       PAGING(&pml4[PML4OFF((uint64_t*)i)], pdp);
       PAGING(&pdp[PDPOFF((uint64_t*)i)], pd);
       PAGING(&pd[PDOFF((uint64_t*)i)], pt);
     #undef PAGING
-    int c_bit = get_cbit();
-    if(c_bit ==0){
-      panic("invalid c_bit!\n");
-    }
-    uint64_t c_bit_mask = 1<<c_bit;
-    pt[PTOFF((uint64_t*)i)] &= (c_bit_mask-1);
+    pt[PTOFF((uint64_t*)i)] &= ~c_bit_mask;
   }
   return 0;
 }

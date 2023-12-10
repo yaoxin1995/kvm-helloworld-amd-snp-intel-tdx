@@ -212,7 +212,7 @@ int snp_update_kernel(int sevfd,int vmfd, struct kvm_userspace_memory_region2* m
   if(sev_ioctl(sevfd,vmfd,KVM_SEV_SNP_LAUNCH_UPDATE,(void*)update,&error)<0){
     pexit("KVM_SEV_SNP_LAUNCH_UPDATE kernel failed");
   }
-  ret =kvm_convert_memory(vmfd,KERNEL_ADDRESS,KERNEL_SIZE,true);
+  ret =kvm_convert_memory(vmfd,0,RAM_SIZE,true);
   return ret;
 
 }
@@ -674,6 +674,12 @@ void execute(VM *vm)
       bool private = vm->run->memory.flags & KVM_MEMORY_EXIT_FLAG_PRIVATE;
       ret = kvm_convert_memory(vm->vmfd,start,size,private);
       break;
+    case KVM_EXIT_SYSTEM_EVENT:
+      if(vm->run->system_event.type==KVM_SYSTEM_EVENT_SEV_TERM){
+        printf("SEV SNP GHCB Termination\n");
+      }else{
+         printf("KVM_EXIT_SYSTEM_EVENT\n");
+      }
     }
     default:
       error("Unhandled reason: %d\n", vm->run->exit_reason);

@@ -102,11 +102,13 @@ void get_tdx_report(){
 }
 
 int kernel_main_sev_snp(uint64_t hob, uint64_t _payload) {
-  asm("hlt");
-  uint64_t ghcb = get_usable(PAGE_SIZE);
+  /*for(uint64_t i=KERNEL_BASE_OFFSET;i<(0x7ddde000|KERNEL_BASE_OFFSET);i+=0x1000){
+    pvalidate(i, Size4K, false);
+  }*/
+  uint64_t ghcb = 0x80000000-PAGE_SIZE-STACK_SIZE-KERNEL_PAGING_SIZE-PAGE_SIZE;
   ghcb_init(ghcb| KERNEL_BASE_OFFSET);
   write_in_console("Succeeded in initializing GHCB\n");
-
+  
   write_in_console("Start setting up heap.\n");
   uint64_t heap = get_usable(HEAP_SIZE);
   init_allocator((void*) ( heap | KERNEL_BASE_OFFSET), HEAP_SIZE);

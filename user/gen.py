@@ -14,6 +14,11 @@ context.arch = 'amd64'
 
 generate('orw.elf', asm(
     f'''
+    mov dx, 0x3f8
+    mov eax, 97
+    out dx, eax
+    mov eax, 0x0A
+    out dx, eax
     mov rdi, [rsp]
     cmp rdi, 2
     jb exit

@@ -16,6 +16,12 @@
 
 //pml4 address
 uint64_t *pml4=0;
+uint64_t *pdp=0;
+uint64_t *pd=0;
+uint64_t *pt=0;
+uint64_t pdp_count = 0;
+uint64_t pd_count = 0;
+uint64_t pt_count = 0;
 static struct e820_entry memory_map[128];
 static int memory_map_num_entries;
 uint64_t c_bit;
@@ -36,13 +42,58 @@ struct page_table_config{
 #define PDOFF(v) _OFFSET(v, 21)
 #define PTOFF(v) _OFFSET(v, 12)
 
-void map_one_page(uint64_t base, uint64_t offset,int prot,int c_bit){
+uint64_t *paging_pml4(uint64_t *pml4, uint64_t vaddr, int c_bit){
+  uint64_t c_bit_mask = 1UL<<c_bit;
+  uint64_t pdp_entry = pml4[PML4OFF(vaddr)];
+  uint64_t *pdp_address;
+  if(!(pdp_entry & PDE64_PRESENT)){
+    pdp_address = (uint64_t *)((uint64_t)pdp+pdp_count*PAGE_SIZE);
+    pml4[PML4OFF(vaddr)] = PDE64_PRESENT | PDE64_RW | PDE64_USER |(uint64_t)pdp_address|c_bit_mask;
+    pdp_count++;
+    if(pdp_count>2) panic("pdp out of range");
+  }else{
+    pdp_address = (uint64_t *)((pdp_entry& -0x1000)& ~c_bit_mask);
+  }
+  return pdp_address;
+}
+
+uint64_t *paging_pdp(uint64_t *pdp, uint64_t vaddr, int c_bit){
+  uint64_t c_bit_mask = 1UL<<c_bit;
+  uint64_t pd_entry = pdp[PDPOFF(vaddr)];
+  uint64_t *pd_address;
+  if(!(pd_entry & PDE64_PRESENT)){
+    pd_address = (uint64_t *)((uint64_t)pd+pd_count*PAGE_SIZE);
+    pdp[PDPOFF(vaddr)] = PDE64_PRESENT | PDE64_RW | PDE64_USER |(uint64_t)pd_address|c_bit_mask;
+    pd_count++;
+    if(pd_count>5) panic("pd out of range");
+  }else{
+    pd_address = (uint64_t *)((pd_entry& -0x1000)& ~c_bit_mask);
+  }
+  return pd_address;
+}
+
+uint64_t *paging_pd(uint64_t *pd, uint64_t vaddr, int c_bit){
+  uint64_t c_bit_mask = 1UL<<c_bit;
+  uint64_t pt_entry = pd[PDOFF(vaddr)];
+  uint64_t *pt_address;
+  if(!(pt_entry & PDE64_PRESENT)){
+    pt_address = (uint64_t *)((uint64_t)pt+pt_count*PAGE_SIZE);
+    pd[PDOFF(vaddr)] = PDE64_PRESENT | PDE64_RW | PDE64_USER |(uint64_t)pt_address|c_bit_mask;
+    pt_count++;
+   if(pt_count>4*512) panic("pt out of range");
+  }else{
+    pt_address = (uint64_t *)((pt_entry& -0x1000)& ~c_bit_mask);
+  }
+  return pt_address;
+}
+
+/*void map_one_page(uint64_t base, uint64_t offset,int prot,int c_bit){
   uint64_t vaddr = base +offset;
   uint64_t *pdp, *pd, *pt;
   uint64_t c_bit_mask = 1<<c_bit;
   #define PAGING(p, c) do { \
     if(!(*p & PDE64_PRESENT)) { \
-      c = (uint64_t*) kframe_allocate_range_pt(1); \
+      c = (uint64_t*) kframe_allocate_range_pt(1); \   
       *p = PDE64_PRESENT | PDE64_RW | PDE64_USER |(uint64_t) c|c_bit_mask; \
     } else { \
       c = (uint64_t*) ((*p & -0x1000) & ~c_bit_mask ); \
@@ -56,7 +107,20 @@ void map_one_page(uint64_t base, uint64_t offset,int prot,int c_bit){
   pt[PTOFF(vaddr)] = PDE64_PRESENT | base | c_bit_mask;
   if(prot & PROT_R) pt[PTOFF(vaddr)] |= PDE64_USER;
   if(prot & PROT_W) pt[PTOFF(vaddr)] |= PDE64_RW;
+}*/
+
+void map_one_page(uint64_t base, uint64_t offset,int prot,int c_bit){
+  uint64_t vaddr = base +offset;
+  uint64_t *pdp_addr, *pd_addr, *pt_addr;
+  uint64_t c_bit_mask = 1UL<<c_bit;
+  pdp_addr = paging_pml4(pml4,vaddr,c_bit);
+  pd_addr = paging_pdp(pdp_addr,vaddr,c_bit);
+  pt_addr = paging_pd(pd_addr,vaddr,c_bit);
+  pt_addr[PTOFF(vaddr)] = PDE64_PRESENT | base | c_bit_mask;
+  if(prot & PROT_R) pt_addr[PTOFF(vaddr)] |= PDE64_USER;
+  if(prot & PROT_W) pt_addr[PTOFF(vaddr)] |= PDE64_RW;
 }
+
 
 //base size and offset should be page size aligned
 void map_address(uint64_t base, uint64_t size, uint64_t offset, int prot){
@@ -131,13 +195,14 @@ void init_kernel_page_tables()
   //write_in_console("\n");
    
   pml4 = (uint64_t*)kframe_allocate_range_pt(1);
+  pdp = (uint64_t*)kframe_allocate_range_pt(2);
+  pd = (uint64_t*)kframe_allocate_range_pt(5);
+  pt = (uint64_t*)kframe_allocate_range_pt(4*512);
   for(int i=0;i<10;i++){
     map_address(pt_config[i].start,pt_config[i].size,pt_config[i].offset,pt_config[i].prot);
   }
 
  //EFER_LME | EFER_LMA| EFER_SCE have been set, just set new cr3
- 
-  asm("hlt");
   
 }
 

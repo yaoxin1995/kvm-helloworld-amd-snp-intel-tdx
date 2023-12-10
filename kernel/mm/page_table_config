@@ -14,7 +14,7 @@
 
 {
     .start    = 0xff000000,
-    .size      = 0x1000000,
+    .size      =0x1000000,
     .offset   = 0,
     .prot     = PROT_W
 },

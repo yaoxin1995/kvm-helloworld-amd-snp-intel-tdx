@@ -19,7 +19,7 @@ void *mmap(void *addr, uint64_t len, int prot) {
 
   if(addr == 0) last_mmapped = addr = last_mmapped - len;
   for(uint64_t i = 0; i < len; i += 0x1000)
-    add_trans_user(addr + i, ret + i, prot);  
+    add_trans_user(addr + i, (void *)(((uint64_t)ret + i)|C_BIT_MASK), prot);  
   return addr;
 }
 
@@ -33,7 +33,7 @@ void *mmap_shared(void *addr, uint64_t len, int prot) {
 
   if(addr == 0) last_mmapped = addr = last_mmapped - len;
   for(uint64_t i = 0; i < len; i += 0x1000)
-    add_trans_user(addr + i, (void *)(((uint64_t)ret + i)|SHARED_BIT), prot);  
+    add_trans_user(addr + i, ret + i, prot);   
   return addr;
 }
 
