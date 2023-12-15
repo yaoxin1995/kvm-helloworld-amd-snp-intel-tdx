@@ -5,7 +5,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <fcntl.h>
-#include <linux/kvm.h>
+#include "kvm.h"
 #include <string.h>
 #include <stdbool.h>
 #include <errno.h>
@@ -212,7 +212,7 @@ int snp_update_kernel(int sevfd,int vmfd, struct kvm_userspace_memory_region2* m
   if(sev_ioctl(sevfd,vmfd,KVM_SEV_SNP_LAUNCH_UPDATE,(void*)update,&error)<0){
     pexit("KVM_SEV_SNP_LAUNCH_UPDATE kernel failed");
   }
-  ret =kvm_convert_memory(vmfd,0,RAM_SIZE,true);
+  ret =kvm_convert_memory(vmfd,KERNEL_ADDRESS,KERNEL_SIZE,true);
   return ret;
 
 }
@@ -298,26 +298,7 @@ static int kvm_handle_vmgexit_msr_protocol(VM *vm, __u64 *ghcb_msr)
 
       return 0;
       break;
-    
-    /*case GHCB_MSR_GPA_REQ:
-      gfn = (*ghcb_msr & GHCB_MSR_PSC_GFN_MASK) >> GHCB_MSR_PSC_GFN_POS;
-      *ghcb_msr = 0;
-      bool found = false;
-      uint64_t ghcb_gpa = gfn<<12;
-      for(int i = 0; i < vm->region_num; i++){
-        if(vm->regions[i]->guest_phys_addr<ghcb_gpa && (vm->regions[i]->guest_phys_addr+vm->regions[i]->memory_size) > (ghcb_gpa+PAGE_SIZE)){
-          ghcb = (struct ghcb *)(vm->regions[i]->userspace_addr+(ghcb_gpa-vm->regions[i]->guest_phys_addr));
-          found = true;
-          break;
-        }
-      }
-      if(found){
-        *ghcb_msr |= ghcb_gpa;
-      }else{
-        *ghcb_msr |=0xfffffffffffff<<12;
-      }
-      *ghcb_msr |= GHCB_MSR_GPA_RESP;
-    */
+      
     default:
       error("vmgexit (msr protocol), ghcb_msr: 0x%llx, invalid request",
                   *ghcb_msr);
